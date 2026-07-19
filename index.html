@@ -44,20 +44,20 @@
   --grad-cta:linear-gradient(135deg,var(--lime),var(--emerald));
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-html,body{margin:0;height:100%;}
+html,body{margin:0;}
 body{
   background:radial-gradient(1200px 600px at 50% -10%,#16181500,#000 70%),var(--bg);
   color:var(--text);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR","Apple SD Gothic Neo",Roboto,sans-serif;
-  display:flex;justify-content:center;
 }
-/* ── 앱 셸(app shell) 레이아웃 ──
-   .app = 화면 높이 고정 · 상단바/지도/하단버튼은 고정, 가운데 .sheet 영역만 스크롤.
-   어떤 환경(브라우저 탭/미리보기/웹뷰)에서도 스크롤이 보장되는 구조. */
-.app{width:100%;max-width:430px;height:100vh;height:100dvh;background:var(--bg);position:relative;display:flex;flex-direction:column;overflow:hidden;}
+/* ── 자연 스크롤 레이아웃 ──
+   브랜드바·지도·폼 등 모든 콘텐츠가 함께 페이지 스크롤됩니다(고정 요소 없음).
+   모바일 브라우저(주소창 높이 변동 등)에서 가장 안정적인 방식입니다. */
+.app{width:100%;max-width:430px;margin:0 auto;background:var(--bg);position:relative;min-height:100vh;}
 
 /* ---- 상단 앱바 + 언어 스위처 ---- */
-.appbar{flex:0 0 auto;z-index:30;display:flex;align-items:center;justify-content:space-between;padding:14px 18px;background:linear-gradient(180deg,#000 40%,#0000);}
+/* 상단 브랜드바: 고정하지 않음(콘텐츠와 함께 스크롤) */
+.appbar{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;background:linear-gradient(180deg,#000 40%,#0000);}
 .brand{display:flex;align-items:center;gap:10px;font-weight:800;}
 .brand .logo{width:34px;height:34px;border-radius:10px;background:var(--grad-cta);display:grid;place-items:center;color:#06210f;font-weight:900;font-size:15px;box-shadow:0 6px 18px rgba(18,198,122,.35);}
 .brand small{display:block;color:var(--muted);font-weight:600;font-size:11px;margin-top:1px;}
@@ -66,7 +66,7 @@ body{
 .lang button.active{background:var(--grad-cta);color:#06210f;}
 
 /* ---- Mock GPS 지도 ---- */
-.map-wrap{flex:0 0 auto;position:relative;height:280px;margin:6px 14px 0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--line);box-shadow:var(--shadow);}
+.map-wrap{position:relative;height:280px;margin:6px 14px 0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--line);box-shadow:var(--shadow);}
 .map-wrap svg{display:block;width:100%;height:100%;background:#0e120e;}
 .map-badge{position:absolute;left:12px;top:12px;z-index:5;background:rgba(17,17,17,.82);backdrop-filter:blur(6px);border:1px solid var(--line);border-radius:999px;padding:7px 12px;font-size:12px;font-weight:700;display:flex;align-items:center;gap:8px;}
 .pulse-dot{width:8px;height:8px;border-radius:50%;background:var(--emerald);animation:pulse 1.6s infinite;}
@@ -74,8 +74,7 @@ body{
 .eta-pill{position:absolute;right:12px;top:12px;z-index:5;background:var(--grad-cta);color:#06210f;font-weight:800;font-size:12px;padding:7px 12px;border-radius:999px;}
 
 /* ---- 시트(스크롤 콘텐츠) ---- */
-/* 가운데 스크롤 영역: min-height:0 이 있어야 flex 컨테이너 안에서 overflow 스크롤이 동작 */
-.sheet{flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:16px 16px 28px;display:flex;flex-direction:column;gap:14px;}
+.sheet{padding:16px 16px 28px;display:flex;flex-direction:column;gap:14px;}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px;}
 .card h3{margin:0 0 12px;font-size:14px;display:flex;align-items:center;gap:8px;}
 .card h3 .k{width:6px;height:16px;border-radius:3px;background:var(--grad-cta);display:inline-block;}
@@ -170,7 +169,8 @@ textarea{resize:vertical;min-height:64px;}
 .fare-note{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.5;}
 
 /* ---- CTA ---- */
-.cta-bar{flex:0 0 auto;padding:14px 16px calc(14px + env(safe-area-inset-bottom));background:var(--bg);border-top:1px solid var(--line);}
+/* 하단 예약 버튼: 스크롤 중에도 항상 보이도록 화면 하단에 부착(sticky). sticky는 스크롤을 막지 않음 */
+.cta-bar{position:sticky;bottom:0;padding:14px 16px calc(14px + env(safe-area-inset-bottom));background:linear-gradient(0deg,var(--bg) 78%,#0b0c0b00);}
 .cta{width:100%;border:0;border-radius:16px;padding:16px;font-size:16px;font-weight:900;color:#06210f;background:var(--grad-cta);cursor:pointer;box-shadow:0 10px 30px rgba(18,198,122,.35);transition:.12s;}
 .cta:active{transform:translateY(1px) scale(.995);}
 .cta:disabled{opacity:.5;box-shadow:none;cursor:not-allowed;}
