@@ -4,27 +4,27 @@
  택시케이 (Taxi-K) · 나트랑 한국인 전용 프리미엄 택시 서비스
  소비자용(Client) 하이브리드 앱 프로토타입 — Single File Edition
 --------------------------------------------------------------------------------
- [문서 목적]
- - 본 파일은 다른 개발팀으로의 인수인계를 전제로 작성된 "실행 가능한 명세서"입니다.
- - 웹뷰(Webview) 기반 하이브리드 앱으로 패키징(iOS/Android)하는 것을 전제로 하며,
-   코어 로직은 프레임워크 무관한 Vanilla JS 모듈/클래스 구조로 격리했습니다.
-   → 추후 React / Vue 이전 시, 아래 Service 클래스들을 그대로 이식할 수 있습니다.
+ [문서 목적] 다른 개발팀 인수인계를 전제로 한 "실행 가능한 명세서".
+   웹뷰(Webview) 패키징(iOS/Android) 전제, 코어 로직은 프레임워크 무관 Vanilla JS.
 
- [v2 변경점 — 그랩(Grab) 스타일 장소 입력]
- - 자유 텍스트 입력의 "타이핑 수고"를 없애기 위해, 출발지/목적지를 "탭 기반 검색 시트"로 개편.
- - PlacesService: 나트랑 관광 POI(공항/호텔/명소) 자동완성 + 인기 장소 칩 + 최근 이용 +
-   현재 위치 + 지도에서 선택. 선택한 장소는 정찰제 구역(zoneId)에 자동 매핑됩니다.
- - TODO(handoff): PlacesService.search() 를 Google Places Autocomplete API 로 교체.
+ [v3 변경점 — 실제 지도 연동 (API 키/결제 불필요)]
+   - Mock SVG 지도를 실제 지도(Leaflet + OpenStreetMap 다크 타일)로 교체.
+   - 장소 자동완성: 무료 지오코딩(Nominatim/OSM) — 나트랑 실제 장소 검색.
+   - 실거리·경로: 무료 라우팅(OSRM) — 실제 도로 경로/거리/ETA.
+   - 현재 위치: 브라우저 GPS(navigator.geolocation) + 역지오코딩.
+   - 지도 탭으로 위치 지정(핀 찍기) 지원.
+   - 외부 서비스가 느리거나 실패해도 데모가 끊기지 않도록 큐레이션 POI가 항상 동작.
 
  [Service 계층 — 프레임워크 무관 재사용 코어]
-   I18nService · FareService · PlacesService · LocationService ·
-   MatchingService · PaymentService · PhotoUploadService · BookingService
- [실서비스 전환 지점 — 코드 내 "TODO(handoff)"]
-   1) PlacesService.search()          → Google Places / Mapbox Search API
-   2) LocationService.start()         → WebSocket / Firebase RTDB 실시간 구독
-   3) PaymentService.register(...)    → 실제 PG SDK 어댑터
-   4) BookingService.submit()         → REST/GraphQL 엔드포인트 (기사앱 FCM 트리거)
-   5) PhotoUploadService.upload()     → Firebase Storage putFile
+   I18nService · FareService · VehicleService · PlacesService · MapService ·
+   LocationService · MatchingService · PaymentService · PhotoUploadService · BookingService
+
+ [실서비스/구글맵 전환 지점 — 코드 내 "TODO(handoff)"]
+   * 지도 제공자 교체(OSM → Google Maps): MapService 내부만 교체. (App/다른 서비스 불변)
+   * 실시간 GPS: LocationService.start()의 Mock 스트림 → WebSocket/Firebase RTDB
+   * 결제: PaymentService.register() → Toss/Inicis/VNPAY/Momo SDK
+   * 예약 전송: BookingService.submit() → REST/GraphQL (기사앱 FCM 트리거)
+   * 사진 업로드: PhotoUploadService.upload() → Firebase Storage
 ================================================================================
 -->
 <html lang="ko">
@@ -32,6 +32,11 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <title>택시케이 (Taxi-K) · Nha Trang Premium</title>
+
+<!-- 실제 지도 라이브러리: Leaflet (오픈소스, API 키 불필요) -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+
 <style>
 /* ============================================================================
    [디자인 토큰] VINFAST LIMO GREEN 아이덴티티 (Black #111 + Lime/Emerald)
@@ -50,13 +55,10 @@ body{
   color:var(--text);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR","Apple SD Gothic Neo",Roboto,sans-serif;
 }
-/* ── 자연 스크롤 레이아웃 ──
-   브랜드바·지도·폼 등 모든 콘텐츠가 함께 페이지 스크롤됩니다(고정 요소 없음).
-   모바일 브라우저(주소창 높이 변동 등)에서 가장 안정적인 방식입니다. */
+/* 자연 스크롤 레이아웃: 모든 콘텐츠가 함께 스크롤(고정 요소 없음) → 모바일 안정 */
 .app{width:100%;max-width:430px;margin:0 auto;background:var(--bg);position:relative;min-height:100vh;}
 
-/* ---- 상단 앱바 + 언어 스위처 ---- */
-/* 상단 브랜드바: 고정하지 않음(콘텐츠와 함께 스크롤) */
+/* 상단 브랜드바(고정하지 않음) */
 .appbar{display:flex;align-items:center;justify-content:space-between;padding:14px 18px;background:linear-gradient(180deg,#000 40%,#0000);}
 .brand{display:flex;align-items:center;gap:10px;font-weight:800;}
 .brand .logo{width:34px;height:34px;border-radius:10px;background:var(--grad-cta);display:grid;place-items:center;color:#06210f;font-weight:900;font-size:15px;box-shadow:0 6px 18px rgba(18,198,122,.35);}
@@ -65,15 +67,24 @@ body{
 .lang button{border:0;background:transparent;color:var(--muted);font-weight:700;font-size:12px;padding:6px 10px;border-radius:999px;cursor:pointer;transition:.15s;}
 .lang button.active{background:var(--grad-cta);color:#06210f;}
 
-/* ---- Mock GPS 지도 ---- */
-.map-wrap{position:relative;height:280px;margin:6px 14px 0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--line);box-shadow:var(--shadow);}
-.map-wrap svg{display:block;width:100%;height:100%;background:#0e120e;}
-.map-badge{position:absolute;left:12px;top:12px;z-index:5;background:rgba(17,17,17,.82);backdrop-filter:blur(6px);border:1px solid var(--line);border-radius:999px;padding:7px 12px;font-size:12px;font-weight:700;display:flex;align-items:center;gap:8px;}
+/* ---- 실제 지도 영역 ---- */
+.map-wrap{position:relative;height:300px;margin:6px 14px 0;border-radius:var(--radius);overflow:hidden;border:1px solid var(--line);box-shadow:var(--shadow);}
+#map{width:100%;height:100%;background:#0e120e;}
+.leaflet-container{background:#0e120e;font-family:inherit;}
+.leaflet-control-attribution{background:rgba(0,0,0,.5)!important;color:#7a8078!important;font-size:9px!important;}
+.leaflet-control-attribution a{color:#9aa39a!important;}
+/* 지도 위 오버레이 배지 (지도 조작을 막지 않도록 pointer-events:none) */
+.map-badge{position:absolute;left:12px;top:12px;z-index:1000;pointer-events:none;background:rgba(17,17,17,.82);backdrop-filter:blur(6px);border:1px solid var(--line);border-radius:999px;padding:7px 12px;font-size:12px;font-weight:700;display:flex;align-items:center;gap:8px;}
 .pulse-dot{width:8px;height:8px;border-radius:50%;background:var(--emerald);animation:pulse 1.6s infinite;}
 @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(18,198,122,.6)}70%{box-shadow:0 0 0 10px rgba(18,198,122,0)}100%{box-shadow:0 0 0 0 rgba(18,198,122,0)}}
-.eta-pill{position:absolute;right:12px;top:12px;z-index:5;background:var(--grad-cta);color:#06210f;font-weight:800;font-size:12px;padding:7px 12px;border-radius:999px;}
+.eta-pill{position:absolute;right:12px;top:12px;z-index:1000;pointer-events:none;background:var(--grad-cta);color:#06210f;font-weight:800;font-size:12px;padding:7px 12px;border-radius:999px;}
+/* 커스텀 마커 아이콘 */
+.mk{width:16px;height:16px;border-radius:50%;border:2px solid #fff;box-shadow:0 0 0 4px rgba(0,0,0,.35);}
+.mk-o{background:var(--emerald);border-color:#0a8f57;}
+.mk-d{background:var(--lime);border-radius:4px;border-color:#7bd400;}
+.mk-car{font-size:24px;line-height:1;filter:drop-shadow(0 0 6px rgba(18,198,122,.95));}
 
-/* ---- 시트(스크롤 콘텐츠) ---- */
+/* ---- 시트(콘텐츠) ---- */
 .sheet{padding:16px 16px 28px;display:flex;flex-direction:column;gap:14px;}
 .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px;}
 .card h3{margin:0 0 12px;font-size:14px;display:flex;align-items:center;gap:8px;}
@@ -85,14 +96,12 @@ select:focus,input:focus,textarea:focus{border-color:var(--emerald);box-shadow:0
 textarea{resize:vertical;min-height:64px;}
 .row2{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
 
-/* ============================================================================
-   [그랩 스타일] 출발지/목적지 탭 필드 + 검색 시트
-   ========================================================================== */
+/* [그랩 스타일] 출발지/목적지 탭 필드 + 검색 시트 */
 .route-box{position:relative;}
 .loc-field{width:100%;display:flex;align-items:center;gap:12px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-sm);padding:13px 14px;cursor:pointer;text-align:left;color:var(--text);transition:.15s;}
 .loc-field:active{transform:scale(.995);}
 .loc-field + .loc-field{margin-top:10px;}
-.loc-dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto;position:relative;}
+.loc-dot{width:11px;height:11px;border-radius:50%;flex:0 0 auto;}
 .loc-dot.origin{background:var(--emerald);box-shadow:0 0 0 3px rgba(18,198,122,.2);}
 .loc-dot.dest{background:var(--lime);border-radius:2px;box-shadow:0 0 0 3px rgba(182,255,58,.18);}
 .loc-text{min-width:0;flex:1;}
@@ -100,14 +109,12 @@ textarea{resize:vertical;min-height:64px;}
 .loc-text b{display:block;font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .loc-text b.empty{color:var(--muted);font-weight:600;}
 .loc-text .sub{display:block;font-size:11px;color:var(--muted);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;}
-/* 두 필드를 잇는 점선 + 스왑 버튼 */
 .route-connector{position:absolute;left:19px;top:38px;bottom:38px;width:0;border-left:2px dotted var(--line);}
 .swap-btn{position:absolute;right:12px;top:50%;transform:translateY(-50%);width:36px;height:36px;border-radius:50%;background:var(--surface);border:1px solid var(--line);color:var(--lime);font-size:16px;cursor:pointer;display:grid;place-items:center;z-index:2;transition:.15s;}
 .swap-btn:active{transform:translateY(-50%) rotate(180deg);}
 
-/* 검색 시트(전체화면 오버레이) */
-/* 화면 고정(fixed) 오버레이 — .app 스크롤 높이에 영향 주지 않도록 분리, 앱 폭(430px)에 맞춰 중앙 정렬 */
-.search-modal{position:fixed;top:0;bottom:0;left:50%;width:100%;max-width:430px;z-index:50;background:var(--bg);display:flex;flex-direction:column;transform:translate(-50%,100%);transition:transform .28s cubic-bezier(.4,0,.2,1);will-change:transform;}
+/* 검색 시트(화면 고정 오버레이) */
+.search-modal{position:fixed;top:0;bottom:0;left:50%;width:100%;max-width:430px;z-index:2000;background:var(--bg);display:flex;flex-direction:column;transform:translate(-50%,100%);transition:transform .28s cubic-bezier(.4,0,.2,1);will-change:transform;}
 .search-modal.open{transform:translate(-50%,0);}
 .sm-head{padding:14px 14px 10px;background:var(--surface);border-bottom:1px solid var(--line);}
 .sm-top{display:flex;align-items:center;gap:10px;margin-bottom:12px;}
@@ -121,31 +128,29 @@ textarea{resize:vertical;min-height:64px;}
 .sm-action:active{border-color:var(--emerald);}
 .sm-action .ic{font-size:15px;}
 .sm-body{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;}
-.sec-label{font-size:12px;font-weight:800;color:var(--muted);padding:16px 16px 8px;letter-spacing:.3px;}
-/* 인기 장소 칩 (가로 스크롤) */
+.sec-label{font-size:12px;font-weight:800;color:var(--muted);padding:16px 16px 8px;letter-spacing:.3px;display:flex;align-items:center;gap:8px;}
+.mini-spin{width:12px;height:12px;border:2px solid var(--line);border-top-color:var(--emerald);border-radius:50%;animation:spin .7s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg)}}
 .chips{display:flex;gap:8px;overflow-x:auto;padding:2px 16px 6px;scrollbar-width:none;}
 .chips::-webkit-scrollbar{display:none;}
 .chip{flex:0 0 auto;display:flex;align-items:center;gap:6px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:9px 14px;font-size:13px;font-weight:700;cursor:pointer;white-space:nowrap;transition:.15s;}
 .chip:active{background:rgba(18,198,122,.12);border-color:var(--emerald);}
-/* POI 목록 행 */
-.poi-row{display:flex;align-items:center;gap:13px;padding:13px 16px;cursor:pointer;border-bottom:1px solid #15181500;transition:.12s;}
+.poi-row{display:flex;align-items:center;gap:13px;padding:13px 16px;cursor:pointer;transition:.12s;}
 .poi-row:active{background:var(--surface);}
 .poi-ic{width:40px;height:40px;flex:0 0 auto;border-radius:12px;background:var(--surface);border:1px solid var(--line);display:grid;place-items:center;font-size:19px;}
 .poi-meta{min-width:0;flex:1;}
 .poi-meta .nm{font-size:14px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .poi-meta .sb{font-size:12px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;}
-.poi-row.typed .poi-ic{color:var(--lime);}
-.empty-msg{text-align:center;color:var(--muted);font-size:13px;padding:40px 16px;}
+.poi-row.typed .poi-ic,.poi-row.remote .poi-ic{color:var(--lime);}
+.empty-msg{text-align:center;color:var(--muted);font-size:13px;padding:32px 16px;}
 
-/* ---- 결제수단 ---- */
+/* 결제수단 / 차량 등급 */
 .pay-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
 .pay-opt{border:1px solid var(--line);background:var(--surface-2);border-radius:var(--radius-sm);padding:10px 6px;text-align:center;cursor:pointer;font-size:11px;font-weight:700;color:var(--muted);transition:.15s;}
 .pay-opt .ic{font-size:18px;display:block;margin-bottom:4px;}
 .pay-opt.active{border-color:var(--emerald);color:var(--text);background:rgba(18,198,122,.1);}
 .pay-opt.soon{opacity:.55;}
 .pay-opt .tag{display:block;font-size:9px;color:var(--warn);margin-top:2px;}
-
-/* ---- 차량 등급 선택 (4/7/16인승) ---- */
 .veh-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;}
 .veh-opt{border:1px solid var(--line);background:var(--surface-2);border-radius:var(--radius-sm);padding:12px 6px;text-align:center;cursor:pointer;transition:.15s;}
 .veh-opt:active{transform:scale(.99);}
@@ -156,38 +161,37 @@ textarea{resize:vertical;min-height:64px;}
 .veh-opt .vprice{font-size:12px;font-weight:800;color:var(--lime);margin-top:5px;}
 .veh-opt .vprice.tag{color:var(--warn);font-weight:700;}
 
-/* ---- 사진 업로드 ---- */
+/* 사진 업로드 */
 .upload{border:1.5px dashed var(--line);border-radius:var(--radius-sm);padding:16px;text-align:center;color:var(--muted);font-size:12px;cursor:pointer;transition:.15s;}
 .upload:hover{border-color:var(--emerald);color:var(--text);}
 .thumbs{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;}
 .thumbs img{width:56px;height:56px;object-fit:cover;border-radius:10px;border:1px solid var(--line);}
 
-/* ---- 요금 요약 ---- */
+/* 요금 요약 */
 .fare{display:flex;align-items:baseline;justify-content:space-between;}
 .fare .amt{font-size:26px;font-weight:900;color:var(--lime);}
 .fare .krw{font-size:12px;color:var(--muted);font-weight:700;}
 .fare-note{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.5;}
 
-/* ---- CTA ---- */
-/* 하단 예약 버튼: 스크롤 중에도 항상 보이도록 화면 하단에 부착(sticky). sticky는 스크롤을 막지 않음 */
+/* CTA */
 .cta-bar{position:sticky;bottom:0;padding:14px 16px calc(14px + env(safe-area-inset-bottom));background:linear-gradient(0deg,var(--bg) 78%,#0b0c0b00);}
 .cta{width:100%;border:0;border-radius:16px;padding:16px;font-size:16px;font-weight:900;color:#06210f;background:var(--grad-cta);cursor:pointer;box-shadow:0 10px 30px rgba(18,198,122,.35);transition:.12s;}
 .cta:active{transform:translateY(1px) scale(.995);}
 .cta:disabled{opacity:.5;box-shadow:none;cursor:not-allowed;}
 
-/* ---- JSON 로그 콘솔 ---- */
+/* JSON 로그 콘솔 */
 .console{background:#07090a;border:1px solid var(--line);border-radius:var(--radius-sm);padding:12px;max-height:260px;overflow:auto;}
 .console pre{margin:0;font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:11px;line-height:1.55;color:#c9f5a3;white-space:pre-wrap;word-break:break-word;}
 .console .muted{color:var(--muted);}
 
-/* ---- 인수인계 노트 ---- */
+/* 인수인계 노트 */
 details.dev{background:var(--surface);border:1px dashed var(--line);border-radius:var(--radius-sm);padding:12px 14px;}
 details.dev summary{cursor:pointer;font-weight:800;font-size:13px;color:var(--lime);}
 details.dev p,details.dev li{font-size:12px;color:var(--muted);line-height:1.6;}
 details.dev code{background:#000;padding:1px 6px;border-radius:5px;color:var(--emerald);}
 
-/* ---- 토스트 ---- */
-.toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%) translateY(20px);background:var(--surface);border:1px solid var(--emerald);color:var(--text);padding:12px 18px;border-radius:14px;font-size:13px;font-weight:700;opacity:0;pointer-events:none;transition:.25s;z-index:60;max-width:90%;text-align:center;}
+/* 토스트 */
+.toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%) translateY(20px);background:var(--surface);border:1px solid var(--emerald);color:var(--text);padding:12px 18px;border-radius:14px;font-size:13px;font-weight:700;opacity:0;pointer-events:none;transition:.25s;z-index:3000;max-width:90%;text-align:center;}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
 .hint{font-size:11px;color:var(--muted);margin-top:6px;}
 </style>
@@ -195,7 +199,7 @@ details.dev code{background:#000;padding:1px 6px;border-radius:5px;color:var(--e
 <body>
 <div class="app" id="app">
 
-  <!-- ═══════════════ 앱바 + 언어 스위처 ═══════════════ -->
+  <!-- 앱바 -->
   <header class="appbar">
     <div class="brand">
       <div class="logo">K</div>
@@ -208,59 +212,30 @@ details.dev code{background:#000;padding:1px 6px;border-radius:5px;color:var(--e
     </div>
   </header>
 
-  <!-- ═══════════════ Mock 실시간 GPS 지도 ═══════════════ -->
+  <!-- 실제 지도 -->
   <div class="map-wrap">
     <div class="map-badge"><span class="pulse-dot"></span><span data-i18n="live_tracking">기사 실시간 위치</span></div>
     <div class="eta-pill" id="etaPill">ETA --</div>
-    <svg id="mapCanvas" viewBox="0 0 400 280" preserveAspectRatio="xMidYMid slice">
-      <defs>
-        <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#1c211c" stroke-width="1"/></pattern>
-        <linearGradient id="routeGrad" x1="0" x2="1"><stop offset="0" stop-color="#12c67a"/><stop offset="1" stop-color="#b6ff3a"/></linearGradient>
-        <filter id="glow"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
-      </defs>
-      <rect width="400" height="280" fill="url(#grid)"/>
-      <path d="M0 210 H400 M60 0 V280 M300 0 V280" stroke="#232823" stroke-width="8" fill="none"/>
-      <path id="routePath" d="M70 230 Q 185 120 300 70" fill="none" stroke="url(#routeGrad)" stroke-width="4" stroke-linecap="round" stroke-dasharray="6 8"/>
-      <g id="destMarker" transform="translate(300,70)"><circle r="9" fill="#111" stroke="#b6ff3a" stroke-width="2"/><circle r="3.5" fill="#b6ff3a"/></g>
-      <g id="originMarker" transform="translate(70,230)"><circle r="9" fill="#111" stroke="#12c67a" stroke-width="2"/><circle r="3.5" fill="#12c67a"/></g>
-      <g id="carMarker" transform="translate(40,255)" filter="url(#glow)">
-        <g id="carRotate" transform="rotate(0)">
-          <rect x="-11" y="-7" width="22" height="14" rx="4" fill="#111" stroke="#b6ff3a" stroke-width="1.5"/>
-          <rect x="-6" y="-4.5" width="12" height="9" rx="2" fill="#12c67a"/>
-          <circle cx="-6" cy="7" r="2.2" fill="#0a8f57"/><circle cx="6" cy="7" r="2.2" fill="#0a8f57"/>
-        </g>
-      </g>
-    </svg>
+    <div id="map"></div>
   </div>
 
-  <!-- ═══════════════ 예약 폼 ═══════════════ -->
+  <!-- 예약 폼 -->
   <main class="sheet">
-
-    <!-- ── 경로 지정 (그랩 스타일 탭 필드) ── -->
+    <!-- 경로 지정 -->
     <section class="card">
       <h3><span class="k"></span><span data-i18n="section_route">경로 지정</span></h3>
       <div class="route-box">
         <div class="route-connector"></div>
         <button class="loc-field" id="fieldOrigin" type="button">
           <span class="loc-dot origin"></span>
-          <span class="loc-text">
-            <small data-i18n="field_origin_label">출발지</small>
-            <b class="empty" data-i18n="tap_to_set">탭하여 위치 선택</b>
-            <span class="sub" hidden></span>
-          </span>
+          <span class="loc-text"><small data-i18n="field_origin_label">출발지</small><b class="empty" data-i18n="tap_to_set">탭하여 위치 선택</b><span class="sub" hidden></span></span>
         </button>
         <button class="loc-field" id="fieldDest" type="button">
           <span class="loc-dot dest"></span>
-          <span class="loc-text">
-            <small data-i18n="field_dest_label">목적지</small>
-            <b class="empty" data-i18n="tap_to_set">탭하여 위치 선택</b>
-            <span class="sub" hidden></span>
-          </span>
+          <span class="loc-text"><small data-i18n="field_dest_label">목적지</small><b class="empty" data-i18n="tap_to_set">탭하여 위치 선택</b><span class="sub" hidden></span></span>
         </button>
-        <button class="swap-btn" id="swapBtn" type="button" title="swap" aria-label="swap">⇅</button>
+        <button class="swap-btn" id="swapBtn" type="button" aria-label="swap">⇅</button>
       </div>
-
-      <!-- 픽업 위치 사진 (Firebase Storage 기반, Mock) -->
       <div class="field" style="margin-top:12px">
         <label class="lbl" data-i18n="photo">상세 위치 사진 (선택 · 픽업지점 인증)</label>
         <div class="upload" id="uploadBox"><div style="font-size:22px">📸</div><div data-i18n="photo_hint">탭하여 픽업 위치 사진을 첨부하세요</div></div>
@@ -269,39 +244,34 @@ details.dev code{background:#000;padding:1px 6px;border-radius:5px;color:var(--e
       </div>
     </section>
 
-    <!-- ── 차량 등급 선택 (4/7/16인승) ── -->
+    <!-- 차량 등급 -->
     <section class="card">
       <h3><span class="k"></span><span data-i18n="section_vehicle">차량 선택</span></h3>
-      <div class="veh-grid" id="vehGrid"><!-- VehicleService 기반 JS 렌더 --></div>
+      <div class="veh-grid" id="vehGrid"></div>
     </section>
 
-    <!-- ── 탑승 정보 ── -->
+    <!-- 탑승 정보 -->
     <section class="card">
       <h3><span class="k"></span><span data-i18n="section_trip">탑승 정보</span></h3>
       <div class="row2">
-        <div class="field">
-          <label class="lbl" data-i18n="pax">탑승 인원</label>
-          <select id="pax"><!-- 차량 인승에 맞춰 JS가 렌더 --></select>
-        </div>
-        <div class="field">
-          <label class="lbl" data-i18n="luggage">캐리어(대형)</label>
+        <div class="field"><label class="lbl" data-i18n="pax">탑승 인원</label><select id="pax"></select></div>
+        <div class="field"><label class="lbl" data-i18n="luggage">캐리어(대형)</label>
           <select id="luggage"><option value="0">0</option><option value="1">1</option><option value="2" selected>2</option><option value="3">3</option><option value="4">4</option><option value="5">5+</option></select>
         </div>
       </div>
-      <div class="field">
-        <label class="lbl" data-i18n="note">기사 요청사항 (선택)</label>
+      <div class="field"><label class="lbl" data-i18n="note">기사 요청사항 (선택)</label>
         <textarea id="note" data-i18n-ph="ph_note" placeholder="예) 유아용 카시트 필요 / 공항 도착층에서 픽업"></textarea>
       </div>
     </section>
 
-    <!-- ── 결제수단 ── -->
+    <!-- 결제수단 -->
     <section class="card">
       <h3><span class="k"></span><span data-i18n="section_pay">결제수단</span></h3>
       <div class="pay-grid" id="payGrid"></div>
       <div class="hint" data-i18n="pay_hint">현장 결제(현금·GLN) 즉시 지원 · 온라인 PG는 순차 오픈</div>
     </section>
 
-    <!-- ── 요금 요약 ── -->
+    <!-- 요금 요약 -->
     <section class="card">
       <h3><span class="k"></span><span data-i18n="section_fare">예상 요금 (정찰제)</span></h3>
       <div class="fare">
@@ -311,48 +281,42 @@ details.dev code{background:#000;padding:1px 6px;border-radius:5px;color:var(--e
       <div class="fare-note" id="fareNote" data-i18n="fare_note">구역 간 고정 요금이 적용되어 미터기 요금 흥정이 없습니다.</div>
     </section>
 
-    <!-- ── 예약 페이로드 로그 ── -->
+    <!-- 예약 페이로드 로그 -->
     <section class="card">
       <h3><span class="k"></span><span data-i18n="section_log">서버 전송 데이터 (기사앱/Admin)</span></h3>
       <div class="console" id="console"><pre class="muted" data-i18n="log_empty">[예약하기]를 누르면 기사용/관리자용 서버로 전송될 JSON 페이로드가 여기에 출력됩니다.</pre></div>
     </section>
 
-    <!-- ── 인수인계 노트 ── -->
+    <!-- 인수인계 노트 -->
     <details class="dev">
       <summary data-i18n="dev_title">🛠 개발자 인수인계 노트 (아키텍처 / 교체 지점)</summary>
-      <p><b>Service Layer</b>(프레임워크 무관): <code>I18nService</code> · <code>FareService</code> · <code>PlacesService</code> · <code>LocationService</code> · <code>MatchingService</code> · <code>PaymentService</code> · <code>BookingService</code></p>
-      <p><b>그랩 스타일 장소 입력:</b> <code>PlacesService.search(q)</code>가 자동완성 소스입니다.
-         현재는 나트랑 POI 로컬 데이터셋(Mock)이며, <code>TODO(handoff)</code>에서 Google Places Autocomplete로 교체합니다.
-         각 POI는 <code>zoneId</code>를 보유해 선택 즉시 정찰제 요금이 계산됩니다.</p>
+      <p><b>지도:</b> 현재 <code>Leaflet + OpenStreetMap</code>(API 키 불필요). 자동완성 <code>Nominatim</code>, 경로 <code>OSRM</code>, 현재위치 <code>navigator.geolocation</code>.
+         구글맵으로 바꾸려면 <code>MapService</code> 내부만 교체하면 되고 App/다른 서비스는 그대로 둡니다.</p>
+      <p><b>Service Layer</b>(프레임워크 무관): <code>I18nService · FareService · VehicleService · PlacesService · MapService · LocationService · MatchingService · PaymentService · BookingService</code></p>
       <ul>
         <li>실시간 GPS: <code>LocationService.start()</code> → WebSocket / Firebase RTDB</li>
         <li>PG 결제: <code>PaymentService.register()</code> → Toss / Inicis / VNPAY / Momo SDK</li>
         <li>예약 전송: <code>BookingService.submit()</code> → REST/GraphQL (기사앱 FCM)</li>
-        <li>사진 업로드: <code>PhotoUploadService.upload()</code> → Firebase Storage</li>
       </ul>
     </details>
   </main>
 
-  <!-- ═══════════════ CTA ═══════════════ -->
   <div class="cta-bar"><button class="cta" id="bookBtn" data-i18n="book">예약하기</button></div>
 
-  <!-- ═══════════════ [그랩 스타일] 장소 검색 시트 ═══════════════ -->
+  <!-- 장소 검색 시트 -->
   <div class="search-modal" id="searchModal" aria-hidden="true">
     <div class="sm-head">
       <div class="sm-top">
         <button class="sm-back" id="smBack" type="button">‹</button>
         <div class="sm-title" id="smTitle" data-i18n="sheet_title_origin">출발지 선택</div>
       </div>
-      <div class="sm-search">
-        <span class="ic">🔍</span>
-        <input type="text" id="smInput" data-i18n-ph="search_ph" placeholder="장소·호텔·명소 검색" autocomplete="off">
-      </div>
+      <div class="sm-search"><span class="ic">🔍</span><input type="text" id="smInput" data-i18n-ph="search_ph" placeholder="장소·호텔·명소 검색" autocomplete="off"></div>
     </div>
     <div class="sm-actions">
       <button class="sm-action" id="actCurrent" type="button"><span class="ic">📍</span><span data-i18n="use_current">현재 위치 사용</span></button>
       <button class="sm-action" id="actMap" type="button"><span class="ic">🗺️</span><span data-i18n="pick_on_map">지도에서 선택</span></button>
     </div>
-    <div class="sm-body" id="smBody"><!-- JS 렌더 --></div>
+    <div class="sm-body" id="smBody"></div>
   </div>
 
   <div class="toast" id="toast"></div>
@@ -363,47 +327,42 @@ details.dev code{background:#000;padding:1px 6px;border-radius:5px;color:var(--e
 /* ============================================================================
  * 0) CONFIG
  * ========================================================================== */
-const CONFIG = { vndToKrw:0.056, currencyLocale:"vi-VN", defaultLang:"ko" };
+const CONFIG = { vndToKrw:0.056, currencyLocale:"vi-VN", defaultLang:"ko", nhatrangCenter:[12.2388,109.1967] };
 
 /* ============================================================================
- * 1) I18nService — 다국어(ko 중심 / en / vi)
+ * 1) I18nService — 다국어(ko/en/vi)
  * ========================================================================== */
 const DICT = {
   ko:{
     brand:"택시케이", brand_sub:"나트랑 프리미엄", live_tracking:"기사 실시간 위치",
-    section_route:"경로 지정", field_origin_label:"출발지", field_dest_label:"목적지",
-    tap_to_set:"탭하여 위치 선택",
+    section_route:"경로 지정", field_origin_label:"출발지", field_dest_label:"목적지", tap_to_set:"탭하여 위치 선택",
     photo:"상세 위치 사진 (선택 · 픽업지점 인증)", photo_hint:"탭하여 픽업 위치 사진을 첨부하세요",
     section_vehicle:"차량 선택 (인승)", seats_unit:"인승", veh_base:"기본", veh_premium:"프리미엄", veh_large:"대형",
     section_trip:"탑승 정보", pax:"탑승 인원", luggage:"캐리어(대형)", note:"기사 요청사항 (선택)",
     ph_note:"예) 유아용 카시트 필요 / 공항 도착층에서 픽업",
     section_pay:"결제수단", pay_hint:"현장 결제(현금·GLN) 즉시 지원 · 온라인 PG는 순차 오픈",
-    section_fare:"예상 요금 (정찰제)", distance:"거리",
-    fare_note:"구역 간 고정 요금이 적용되어 미터기 요금 흥정이 없습니다.",
+    section_fare:"예상 요금 (정찰제)", distance:"거리", fare_note:"구역 간 고정 요금이 적용되어 미터기 요금 흥정이 없습니다.",
     section_log:"서버 전송 데이터 (기사앱/Admin)",
     log_empty:"[예약하기]를 누르면 기사용/관리자용 서버로 전송될 JSON 페이로드가 여기에 출력됩니다.",
     book:"예약하기", dev_title:"🛠 개발자 인수인계 노트 (아키텍처 / 교체 지점)",
     toast_booked:"예약 요청 전송 완료! 기사 배차 중…", toast_need_route:"출발지와 목적지를 선택해 주세요.",
     pay_cash:"현금", pay_gln:"GLN", pay_toss:"토스", pay_vnpay:"VNPAY", pay_momo:"Momo", pay_inicis:"이니시스", soon:"준비중",
-    // 검색 시트
     sheet_title_origin:"출발지 선택", sheet_title_dest:"목적지 선택",
     search_ph:"장소·호텔·명소 검색", use_current:"현재 위치 사용", pick_on_map:"지도에서 선택",
-    sec_popular:"인기 장소", sec_recent:"최근 이용", sec_all:"전체 장소", sec_results:"검색 결과",
+    sec_popular:"인기 장소", sec_recent:"최근 이용", sec_all:"전체 장소", sec_results:"검색 결과", sec_map:"지도 검색 결과",
     no_results:"검색 결과가 없습니다", type_as_address:"직접 주소로 입력",
-    current_loc_name:"현재 위치", map_pin_name:"지도에서 지정한 위치",
-    zones:{airport:"깜란 국제공항",city:"시내 중심가",vinwonders:"빈원더스/빈펄",beach:"북부 해변(Bai Dai)",nhatrang_s:"나트랑 남부",honchong:"혼쫑 곶"}
+    map_pick_hint:"지도를 탭해서 위치를 지정하세요", locating:"현재 위치 확인 중…", loc_denied:"위치 권한이 거부되어 시내 중심으로 설정합니다.", searching:"검색 중…",
+    zones:{airport:"깜란 국제공항",city:"시내 중심가",vinwonders:"빈원더스/빈펄",beach:"북부 해변",nhatrang_s:"나트랑 남부",honchong:"혼쫑 곶"}
   },
   en:{
     brand:"Taxi-K", brand_sub:"Nha Trang Premium", live_tracking:"Driver live location",
-    section_route:"Route", field_origin_label:"Pickup", field_dest_label:"Drop-off",
-    tap_to_set:"Tap to choose location",
+    section_route:"Route", field_origin_label:"Pickup", field_dest_label:"Drop-off", tap_to_set:"Tap to choose location",
     photo:"Pickup photo (optional)", photo_hint:"Tap to attach a pickup spot photo",
     section_vehicle:"Vehicle (seats)", seats_unit:"-seat", veh_base:"Standard", veh_premium:"Premium", veh_large:"Group",
     section_trip:"Trip info", pax:"Passengers", luggage:"Large luggage", note:"Note to driver (optional)",
     ph_note:"e.g. Baby car seat / pick up at arrivals",
     section_pay:"Payment", pay_hint:"Cash & GLN on-site now · online PG rolling out",
-    section_fare:"Fixed fare estimate", distance:"Distance",
-    fare_note:"Zone-to-zone fixed pricing — no meter, no haggling.",
+    section_fare:"Fixed fare estimate", distance:"Distance", fare_note:"Zone-to-zone fixed pricing — no meter, no haggling.",
     section_log:"Server payload (Driver/Admin)",
     log_empty:"Press [Book] to preview the JSON payload sent to the Driver/Admin servers.",
     book:"Book now", dev_title:"🛠 Developer handoff notes (architecture / swap points)",
@@ -411,22 +370,20 @@ const DICT = {
     pay_cash:"Cash", pay_gln:"GLN", pay_toss:"Toss", pay_vnpay:"VNPAY", pay_momo:"Momo", pay_inicis:"Inicis", soon:"Soon",
     sheet_title_origin:"Set pickup", sheet_title_dest:"Set drop-off",
     search_ph:"Search place, hotel, spot", use_current:"Use current location", pick_on_map:"Pick on map",
-    sec_popular:"Popular", sec_recent:"Recent", sec_all:"All places", sec_results:"Results",
+    sec_popular:"Popular", sec_recent:"Recent", sec_all:"All places", sec_results:"Results", sec_map:"Map search",
     no_results:"No results", type_as_address:"Use as typed address",
-    current_loc_name:"Current location", map_pin_name:"Pinned location on map",
-    zones:{airport:"Cam Ranh Airport",city:"City Center",vinwonders:"VinWonders/Vinpearl",beach:"North Beach (Bai Dai)",nhatrang_s:"Nha Trang South",honchong:"Hon Chong"}
+    map_pick_hint:"Tap the map to set the location", locating:"Locating…", loc_denied:"Location denied — using city center.", searching:"Searching…",
+    zones:{airport:"Cam Ranh Airport",city:"City Center",vinwonders:"VinWonders/Vinpearl",beach:"North Beach",nhatrang_s:"Nha Trang South",honchong:"Hon Chong"}
   },
   vi:{
     brand:"Taxi-K", brand_sub:"Nha Trang Premium", live_tracking:"Vị trí tài xế",
-    section_route:"Lộ trình", field_origin_label:"Điểm đón", field_dest_label:"Điểm đến",
-    tap_to_set:"Chạm để chọn địa điểm",
+    section_route:"Lộ trình", field_origin_label:"Điểm đón", field_dest_label:"Điểm đến", tap_to_set:"Chạm để chọn địa điểm",
     photo:"Ảnh điểm đón (tùy chọn)", photo_hint:"Chạm để đính kèm ảnh điểm đón",
     section_vehicle:"Loại xe (chỗ)", seats_unit:" chỗ", veh_base:"Cơ bản", veh_premium:"Cao cấp", veh_large:"Nhóm",
     section_trip:"Thông tin chuyến", pax:"Số khách", luggage:"Vali lớn", note:"Ghi chú cho tài xế (tùy chọn)",
     ph_note:"vd) Cần ghế em bé / đón ở ga đến",
     section_pay:"Thanh toán", pay_hint:"Tiền mặt & GLN tại chỗ · PG online sắp có",
-    section_fare:"Giá cố định dự kiến", distance:"Khoảng cách",
-    fare_note:"Giá cố định theo khu — không đồng hồ, không mặc cả.",
+    section_fare:"Giá cố định dự kiến", distance:"Khoảng cách", fare_note:"Giá cố định theo khu — không đồng hồ, không mặc cả.",
     section_log:"Dữ liệu gửi server (Tài xế/Admin)",
     log_empty:"Nhấn [Đặt xe] để xem JSON gửi tới server.",
     book:"Đặt xe", dev_title:"🛠 Ghi chú bàn giao (kiến trúc / điểm thay thế)",
@@ -434,10 +391,10 @@ const DICT = {
     pay_cash:"Tiền mặt", pay_gln:"GLN", pay_toss:"Toss", pay_vnpay:"VNPAY", pay_momo:"Momo", pay_inicis:"Inicis", soon:"Sắp có",
     sheet_title_origin:"Chọn điểm đón", sheet_title_dest:"Chọn điểm đến",
     search_ph:"Tìm địa điểm, khách sạn", use_current:"Vị trí hiện tại", pick_on_map:"Chọn trên bản đồ",
-    sec_popular:"Phổ biến", sec_recent:"Gần đây", sec_all:"Tất cả", sec_results:"Kết quả",
+    sec_popular:"Phổ biến", sec_recent:"Gần đây", sec_all:"Tất cả", sec_results:"Kết quả", sec_map:"Tìm trên bản đồ",
     no_results:"Không có kết quả", type_as_address:"Dùng địa chỉ đã nhập",
-    current_loc_name:"Vị trí hiện tại", map_pin_name:"Vị trí ghim trên bản đồ",
-    zones:{airport:"Sân bay Cam Ranh",city:"Trung tâm",vinwonders:"VinWonders/Vinpearl",beach:"Bãi Dài (Bắc)",nhatrang_s:"Nha Trang Nam",honchong:"Hòn Chồng"}
+    map_pick_hint:"Chạm vào bản đồ để chọn vị trí", locating:"Đang định vị…", loc_denied:"Bị từ chối vị trí — dùng trung tâm.", searching:"Đang tìm…",
+    zones:{airport:"Sân bay Cam Ranh",city:"Trung tâm",vinwonders:"VinWonders/Vinpearl",beach:"Bãi biển phía Bắc",nhatrang_s:"Nha Trang Nam",honchong:"Hòn Chồng"}
   }
 };
 const I18nService = {
@@ -452,7 +409,7 @@ const I18nService = {
 };
 
 /* ============================================================================
- * 2) FareService — 구역별 정찰제 (고정 요금 매트릭스, VND)
+ * 2) FareService — 구역별 정찰제(고정 요금, VND) + 차량 배수
  * ========================================================================== */
 const FareService = {
   MATRIX:{
@@ -474,7 +431,6 @@ const FareService = {
   quote(origin,dest,{luggage=0, vehicleMult=1}={}){
     if(!origin||!dest) return null;
     let base = origin===dest ? 60000 : (this.MATRIX[origin]?.[dest] ?? 0);
-    // 차량 등급 배수 적용 후 1,000 VND 단위 반올림
     base = Math.round(base * vehicleMult / 1000) * 1000;
     const surcharge = luggage>=4 ? 40000 : 0;
     const vnd = base + surcharge;
@@ -483,10 +439,7 @@ const FareService = {
 };
 
 /* ============================================================================
- * 2-1) VehicleService — 차량 등급(인승) 정의 및 요금 배수
- *    - 4인승 세단(기본) / 7인승 리모 그린(프리미엄·브랜드 대표차) / 16인승 밴(단체)
- *    - mult: 구역 정찰제 기본요금에 곱하는 배수. tagKey: 미선택 시 표시 라벨.
- *    - 신규 차종 추가 = 아래 배열에 항목 1개 추가로 확장(UI/요금 자동 반영).
+ * 2-1) VehicleService — 차량 등급(인승) + 요금 배수
  * ========================================================================== */
 const VEHICLES = [
   { id:"sedan4", seats:4,  mult:1.0,  tagKey:"veh_base",    icon:"🚗", type:"VINFAST_SEDAN_4",     name:{ko:"4인승 세단",en:"4-seat Sedan",vi:"Sedan 4 chỗ"} },
@@ -496,94 +449,129 @@ const VEHICLES = [
 const VehicleService = { list(){ return VEHICLES; }, get(id){ return VEHICLES.find(v=>v.id===id)||null; }, default(){ return VehicleService.get("limo7"); } };
 
 /* ============================================================================
- * 3) PlacesService — [그랩 스타일] 장소 자동완성 (Mock)
- *    - 나트랑 관광객 POI 데이터셋: 각 항목은 정찰제 zoneId를 보유
- *    - search(q): 이름(다국어)/힌트/카테고리 부분일치 → 자동완성 결과
- *    - TODO(handoff): 아래 search()를 Google Places Autocomplete API 로 교체.
- *      (place_id → Place Details 로 lat/lng 수신 후 zoneId는 서버가 폴리곤 매핑)
+ * 3) 나트랑 구역 대표 좌표 + PlacesService
+ *    - POI는 실제 위경도(lat,lng) 보유 → 실지도에 정확히 표시.
+ *    - search(): 로컬 큐레이션(즉시, 항상 동작)
+ *    - searchRemote(): Nominatim/OSM 자동완성(무료, 비동기) — 실패해도 데모 유지
+ *    - TODO(handoff): 구글 전환 시 searchRemote를 Places Autocomplete로 교체 가능
  * ========================================================================== */
+const ZONE_CENTERS = {
+  airport:[11.9985,109.2193], city:[12.2388,109.1965], vinwonders:[12.2140,109.2530],
+  beach:[12.2800,109.2000], nhatrang_s:[12.1500,109.2000], honchong:[12.2660,109.2000]
+};
 const PlacesService = {
-  // coords: Mock 지도(viewBox 400x280) 좌표 — 실서비스에선 위경도(lat/lng)
   POIS:[
-    {id:"airport",     cat:"✈️", zoneId:"airport",    coords:[350,250], hint:"Cam Ranh Intl (CXR)", name:{ko:"깜란 국제공항 T2",en:"Cam Ranh Airport T2",vi:"Sân bay Cam Ranh T2"}},
-    {id:"vinwonders",  cat:"🎡", zoneId:"vinwonders", coords:[320,70],  hint:"Hon Tre Island",     name:{ko:"빈원더스 나트랑",en:"VinWonders Nha Trang",vi:"VinWonders Nha Trang"}},
-    {id:"vinpearl",    cat:"🏝️", zoneId:"vinwonders", coords:[300,88],  hint:"Hon Tre Island",     name:{ko:"빈펄 리조트 (혼째섬)",en:"Vinpearl Resort (Hon Tre)",vi:"Vinpearl Resort (Hòn Tre)"}},
-    {id:"nhatrang_beach",cat:"🏖️",zoneId:"city",      coords:[160,130], hint:"Tran Phu Beach",     name:{ko:"나트랑 비치 (쩐푸)",en:"Nha Trang Beach (Tran Phu)",vi:"Biển Nha Trang (Trần Phú)"}},
-    {id:"bai_dai",     cat:"🌊", zoneId:"beach",      coords:[250,40],  hint:"Long Beach, North",  name:{ko:"바이다이 비치 (북부)",en:"Bai Dai Beach (North)",vi:"Bãi Dài (phía Bắc)"}},
-    {id:"muongthanh",  cat:"🏨", zoneId:"city",       coords:[178,150], hint:"60 Tran Phu",        name:{ko:"무엉탄 럭셔리 나트랑",en:"Muong Thanh Luxury",vi:"Mường Thanh Luxury"}},
-    {id:"novotel",     cat:"🏨", zoneId:"city",       coords:[158,135], hint:"50 Tran Phu",        name:{ko:"노보텔 나트랑",en:"Novotel Nha Trang",vi:"Novotel Nha Trang"}},
-    {id:"sheraton",    cat:"🏨", zoneId:"city",       coords:[162,128], hint:"26-28 Tran Phu",     name:{ko:"쉐라톤 나트랑",en:"Sheraton Nha Trang",vi:"Sheraton Nha Trang"}},
-    {id:"intercon",    cat:"🏨", zoneId:"city",       coords:[155,142], hint:"32-34 Tran Phu",     name:{ko:"인터컨티넨탈 나트랑",en:"InterContinental",vi:"InterContinental"}},
-    {id:"hon_chong",   cat:"🪨", zoneId:"honchong",   coords:[120,60],  hint:"Hon Chong Promontory",name:{ko:"혼쫑 곶",en:"Hon Chong Promontory",vi:"Hòn Chồng"}},
-    {id:"ponagar",     cat:"🛕", zoneId:"honchong",   coords:[110,75],  hint:"Cham Towers",        name:{ko:"뽀나가 탑",en:"Po Nagar Cham Towers",vi:"Tháp Bà Ponagar"}},
-    {id:"thapba_spa",  cat:"♨️", zoneId:"honchong",   coords:[125,70],  hint:"Mud Bath",           name:{ko:"탑바 머드 스파",en:"Thap Ba Mud Spa",vi:"Tắm bùn Tháp Bà"}},
-    {id:"long_son",    cat:"🛕", zoneId:"city",        coords:[92,150],  hint:"Big Buddha",         name:{ko:"롱선사 (와불/대불)",en:"Long Son Pagoda",vi:"Chùa Long Sơn"}},
-    {id:"cathedral",   cat:"⛪", zoneId:"city",        coords:[150,140], hint:"Nha Trang Cathedral",name:{ko:"나트랑 대성당",en:"Nha Trang Cathedral",vi:"Nhà thờ Núi"}},
-    {id:"dam_market",  cat:"🛍️", zoneId:"city",       coords:[140,120], hint:"Cho Dam",            name:{ko:"담 시장",en:"Dam Market",vi:"Chợ Đầm"}},
-    {id:"night_market",cat:"🌃", zoneId:"city",        coords:[165,145], hint:"Tran Phu Night Mkt", name:{ko:"나트랑 야시장",en:"Nha Trang Night Market",vi:"Chợ đêm Nha Trang"}},
-    {id:"lotte_mart",  cat:"🛒", zoneId:"city",        coords:[172,160], hint:"58 Tue Tinh",        name:{ko:"롯데마트 나트랑",en:"Lotte Mart Nha Trang",vi:"Lotte Mart Nha Trang"}},
-    {id:"diamond_bay", cat:"⛳", zoneId:"nhatrang_s",  coords:[200,222], hint:"South, Golf & Resort",name:{ko:"다이아몬드 베이 (남부)",en:"Diamond Bay Resort",vi:"Diamond Bay Resort"}},
-    {id:"mia_resort",  cat:"🌴", zoneId:"nhatrang_s",  coords:[210,232], hint:"Bai Dong, South",    name:{ko:"미아 리조트 (남부)",en:"Mia Resort",vi:"Mia Resort"}},
-    {id:"ana_mandara", cat:"🌴", zoneId:"nhatrang_s",  coords:[195,215], hint:"Cam Ranh Peninsula", name:{ko:"아나만다라 리조트",en:"Ana Mandara Resort",vi:"Ana Mandara"}}
+    {id:"airport",     cat:"✈️", zoneId:"airport",    coords:[11.9985,109.2193], hint:"Cam Ranh Intl (CXR)", name:{ko:"깜란 국제공항",en:"Cam Ranh Airport",vi:"Sân bay Cam Ranh"}},
+    {id:"vinwonders",  cat:"🎡", zoneId:"vinwonders", coords:[12.2140,109.2530], hint:"Hon Tre Island",     name:{ko:"빈원더스 나트랑",en:"VinWonders Nha Trang",vi:"VinWonders Nha Trang"}},
+    {id:"vinpearl",    cat:"🏝️", zoneId:"vinwonders", coords:[12.2110,109.2560], hint:"Hon Tre Island",     name:{ko:"빈펄 리조트 (혼째섬)",en:"Vinpearl Resort (Hon Tre)",vi:"Vinpearl Resort (Hòn Tre)"}},
+    {id:"nhatrang_beach",cat:"🏖️",zoneId:"city",      coords:[12.2388,109.1965], hint:"Tran Phu Beach",     name:{ko:"나트랑 비치 (쩐푸)",en:"Nha Trang Beach (Tran Phu)",vi:"Biển Nha Trang (Trần Phú)"}},
+    {id:"bai_dai",     cat:"🌊", zoneId:"beach",      coords:[12.2800,109.2010], hint:"North Beach",        name:{ko:"북부 해변",en:"North Beach",vi:"Bãi biển phía Bắc"}},
+    {id:"muongthanh",  cat:"🏨", zoneId:"city",       coords:[12.2360,109.1950], hint:"60 Tran Phu",        name:{ko:"무엉탄 럭셔리 나트랑",en:"Muong Thanh Luxury",vi:"Mường Thanh Luxury"}},
+    {id:"novotel",     cat:"🏨", zoneId:"city",       coords:[12.2420,109.1930], hint:"50 Tran Phu",        name:{ko:"노보텔 나트랑",en:"Novotel Nha Trang",vi:"Novotel Nha Trang"}},
+    {id:"sheraton",    cat:"🏨", zoneId:"city",       coords:[12.2450,109.1935], hint:"26-28 Tran Phu",     name:{ko:"쉐라톤 나트랑",en:"Sheraton Nha Trang",vi:"Sheraton Nha Trang"}},
+    {id:"intercon",    cat:"🏨", zoneId:"city",       coords:[12.2410,109.1938], hint:"32-34 Tran Phu",     name:{ko:"인터컨티넨탈 나트랑",en:"InterContinental",vi:"InterContinental"}},
+    {id:"hon_chong",   cat:"🪨", zoneId:"honchong",   coords:[12.2670,109.2050], hint:"Promontory",         name:{ko:"혼쫑 곶",en:"Hon Chong",vi:"Hòn Chồng"}},
+    {id:"ponagar",     cat:"🛕", zoneId:"honchong",   coords:[12.2655,109.1955], hint:"Cham Towers",        name:{ko:"뽀나가 탑",en:"Po Nagar Towers",vi:"Tháp Bà Ponagar"}},
+    {id:"thapba_spa",  cat:"♨️", zoneId:"honchong",   coords:[12.2720,109.1830], hint:"Mud Bath",           name:{ko:"탑바 머드 스파",en:"Thap Ba Mud Spa",vi:"Tắm bùn Tháp Bà"}},
+    {id:"long_son",    cat:"🛕", zoneId:"city",        coords:[12.2510,109.1790], hint:"Big Buddha",         name:{ko:"롱선사 (대불)",en:"Long Son Pagoda",vi:"Chùa Long Sơn"}},
+    {id:"cathedral",   cat:"⛪", zoneId:"city",        coords:[12.2470,109.1840], hint:"Cathedral",          name:{ko:"나트랑 대성당",en:"Nha Trang Cathedral",vi:"Nhà thờ Núi"}},
+    {id:"dam_market",  cat:"🛍️", zoneId:"city",       coords:[12.2490,109.1920], hint:"Cho Dam",            name:{ko:"담 시장",en:"Dam Market",vi:"Chợ Đầm"}},
+    {id:"night_market",cat:"🌃", zoneId:"city",        coords:[12.2360,109.1955], hint:"Night Market",       name:{ko:"나트랑 야시장",en:"Nha Trang Night Market",vi:"Chợ đêm Nha Trang"}},
+    {id:"lotte_mart",  cat:"🛒", zoneId:"city",        coords:[12.2560,109.1870], hint:"58 Tue Tinh",        name:{ko:"롯데마트 나트랑",en:"Lotte Mart Nha Trang",vi:"Lotte Mart Nha Trang"}},
+    {id:"diamond_bay", cat:"⛳", zoneId:"nhatrang_s",  coords:[12.1600,109.1900], hint:"South Resort",       name:{ko:"다이아몬드 베이 (남부)",en:"Diamond Bay Resort",vi:"Diamond Bay Resort"}},
+    {id:"mia_resort",  cat:"🌴", zoneId:"nhatrang_s",  coords:[12.1450,109.2050], hint:"South",              name:{ko:"미아 리조트 (남부)",en:"Mia Resort",vi:"Mia Resort"}},
+    {id:"ana_mandara", cat:"🌴", zoneId:"nhatrang_s",  coords:[12.1500,109.2100], hint:"South",              name:{ko:"아나만다라 리조트",en:"Ana Mandara Resort",vi:"Ana Mandara"}}
   ],
   POPULAR:["airport","vinwonders","nhatrang_beach","bai_dai","night_market","vinpearl"],
-  get(id){ return this.POIS.find(p=>p.id===id) || null; },
+  get(id){ return this.POIS.find(p=>p.id===id)||null; },
   popular(){ return this.POPULAR.map(id=>this.get(id)).filter(Boolean); },
-  /* 자동완성 검색 (Mock). 다국어 이름 + 힌트 부분일치. */
-  search(q){
-    const s=(q||"").trim().toLowerCase(); if(!s) return [];
-    // TODO(handoff): return googlePlaces.autocomplete(s) 결과를 동일 형태로 매핑
-    return this.POIS.filter(p=>{
-      const hay=(p.name.ko+p.name.en+p.name.vi+p.hint+p.id).toLowerCase();
-      return hay.includes(s);
+  search(q){ const s=(q||"").trim().toLowerCase(); if(!s) return []; return this.POIS.filter(p=>(p.name.ko+p.name.en+p.name.vi+p.hint+p.id).toLowerCase().includes(s)); },
+  /* 위경도 → 가장 가까운 정찰제 구역 */
+  nearestZone(ll){ let best="city",bd=Infinity; for(const z in ZONE_CENTERS){ const c=ZONE_CENTERS[z]; const d=(c[0]-ll[0])**2+(c[1]-ll[1])**2; if(d<bd){bd=d;best=z;} } return best; },
+  /* Nominatim(OSM) 자동완성 — 나트랑/깜란 영역 한정, 무료·키 불필요 */
+  async searchRemote(q){
+    const s=(q||"").trim(); if(s.length<2) return [];
+    const vb="109.05,12.45,109.40,11.85"; // 좌,상,우,하 (경도/위도) — 나트랑·깜란 근방
+    const url=`https://nominatim.openstreetmap.org/search?format=json&limit=6&countrycodes=vn&bounded=1&viewbox=${vb}&accept-language=${I18nService.lang}&q=${encodeURIComponent(s)}`;
+    const res=await fetch(url,{headers:{Accept:"application/json"}});
+    if(!res.ok) return [];
+    const data=await res.json();
+    return (data||[]).map(d=>{
+      const ll=[parseFloat(d.lat),parseFloat(d.lon)];
+      const parts=(d.display_name||"").split(",");
+      const nm=parts[0].trim();
+      return { id:"osm_"+d.place_id, cat:"📍", zoneId:this.nearestZone(ll), coords:ll, remote:true, typed:false,
+               name:{ko:nm,en:nm,vi:nm}, hint:parts.slice(1,3).join(",").trim() };
     });
   },
-  /* 자유 입력 주소 → 키워드로 zone 추정 (검색 결과가 없을 때 '직접 입력' 지원) */
-  classifyZone(text){
-    const s=(text||"").toLowerCase();
+  /* 역지오코딩: 좌표 → 사람이 읽는 이름 */
+  async reverseName(ll){
+    try{
+      const url=`https://nominatim.openstreetmap.org/reverse?format=json&lat=${ll[0]}&lon=${ll[1]}&accept-language=${I18nService.lang}`;
+      const r=await fetch(url); if(!r.ok) return null; const d=await r.json();
+      return d.display_name ? d.display_name.split(",").slice(0,2).join(", ") : null;
+    }catch(e){ return null; }
+  },
+  /* 브라우저 GPS 현재 위치 */
+  getCurrentLatLng(){ return new Promise((res,rej)=>{ if(!navigator.geolocation) return rej(new Error("no geo")); navigator.geolocation.getCurrentPosition(p=>res([p.coords.latitude,p.coords.longitude]), rej, {timeout:8000,enableHighAccuracy:true}); }); },
+  /* 자유 입력 주소 → 키워드로 zone 추정(좌표는 구역 중심으로 대체) */
+  classifyZone(text){ const s=(text||"").toLowerCase();
     if(/공항|airport|cam ranh|cxr|sân bay/.test(s)) return "airport";
     if(/빈원더스|빈펄|vinwonder|vinpearl|hon tre|hòn tre/.test(s)) return "vinwonders";
-    if(/바이다이|bai dai|bãi dài|long beach/.test(s)) return "beach";
+    if(/바이다이|bai dai|bãi dài|북부|north/.test(s)) return "beach";
     if(/혼쫑|뽀나가|hon chong|hòn chồng|ponagar|tháp bà/.test(s)) return "honchong";
     if(/남부|south|diamond|mia|mandara|nam/.test(s)) return "nhatrang_s";
-    return "city"; // 기본값: 시내 중심
-  },
-  /* 현재 위치 (Mock). TODO(handoff): navigator.geolocation + reverse geocode */
-  current(){ return { id:"__current", cat:"📍", zoneId:"city", coords:[150,140], typed:false,
-                      name:{ko:DICT.ko.current_loc_name,en:DICT.en.current_loc_name,vi:DICT.vi.current_loc_name}, hint:"GPS" }; },
-  /* 지도 핀 (Mock). TODO(handoff): 지도 드래그로 좌표 지정 + reverse geocode */
-  mapPin(){ return { id:"__mappin", cat:"🗺️", zoneId:"city", coords:[185,120], typed:false,
-                      name:{ko:DICT.ko.map_pin_name,en:DICT.en.map_pin_name,vi:DICT.vi.map_pin_name}, hint:"Nha Trang" }; },
-  /* 자유 입력 주소를 POI 형태로 래핑 */
-  customAddress(text){ const z=this.classifyZone(text); return { id:"__typed", cat:"✏️", zoneId:z, coords:null, typed:true,
-                      name:{ko:text,en:text,vi:text}, hint:I18nService.zoneName(z) }; }
+    return "city"; },
+  customAddress(text){ const z=this.classifyZone(text); return { id:"__typed", cat:"✏️", zoneId:z, coords:ZONE_CENTERS[z], typed:true, name:{ko:text,en:text,vi:text}, hint:I18nService.zoneName(z) }; }
 };
 
 /* ============================================================================
- * 4) LocationService — 실시간 GPS 스트림 (Mock, 옵저버 패턴)
- *    - setTarget(point): 차량이 도착할 출발지 좌표 지정 → 경로 재생성
- *    - TODO(handoff): start() 내부 setInterval을 WS/Firebase 구독으로 교체
+ * 4) MapService — 실제 지도 추상화 (현재 Leaflet + OpenStreetMap 다크 타일)
+ *    - 지도 제공자 교체 지점: 여기 내부만 구글맵으로 바꾸면 App은 그대로 동작.
+ * ========================================================================== */
+const MapService = {
+  map:null, oMarker:null, dMarker:null, driver:null, route:null, _clickCb:null,
+  available(){ return typeof L!=="undefined" && !!this.map; },
+  init(){
+    if(typeof L==="undefined"){ console.warn("Leaflet 미로딩 — 지도 없이 동작"); return; }
+    this.map = L.map("map",{ zoomControl:false, attributionControl:true }).setView(CONFIG.nhatrangCenter, 13);
+    // 다크 테마 무료 타일(CARTO) — 브랜드(블랙/그린)와 어울림. 대체: OpenStreetMap 표준 타일.
+    L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+      { subdomains:"abcd", maxZoom:19, attribution:'© OpenStreetMap, © CARTO' }).addTo(this.map);
+    this.map.on("click", e=>{ if(this._clickCb) this._clickCb([e.latlng.lat, e.latlng.lng]); });
+    setTimeout(()=>this.map.invalidateSize(), 200); // 레이아웃 확정 후 리사이즈
+  },
+  _icon(cls,html){ return L.divIcon({className:"", html:`<div class="${cls}">${html||""}</div>`, iconSize:[20,20], iconAnchor:[10,10]}); },
+  setOrigin(ll){ if(!this.available()) return; if(this.oMarker) this.oMarker.setLatLng(ll); else this.oMarker=L.marker(ll,{icon:this._icon("mk mk-o")}).addTo(this.map); },
+  setDest(ll){ if(!this.available()) return; if(this.dMarker) this.dMarker.setLatLng(ll); else this.dMarker=L.marker(ll,{icon:this._icon("mk mk-d")}).addTo(this.map); },
+  moveDriver(ll){ if(!this.available()) return; if(this.driver) this.driver.setLatLng(ll); else this.driver=L.marker(ll,{icon:this._icon("mk-car","🚗"), zIndexOffset:1000}).addTo(this.map); },
+  drawRoute(a,b,latlngs){ if(!this.available()) return; if(this.route) this.map.removeLayer(this.route); this.route=L.polyline(latlngs||[a,b],{color:"#b6ff3a",weight:4,opacity:.9,lineJoin:"round"}).addTo(this.map); },
+  fit(a,b){ if(!this.available()) return; try{ this.map.fitBounds(L.latLngBounds([a,b]).pad(0.35)); }catch(e){} },
+  fitPath(ll){ if(!this.available()) return; try{ this.map.fitBounds(L.latLngBounds(ll).pad(0.2)); }catch(e){} },
+  center(ll){ if(!this.available()) return; this.map.setView(ll,14); },
+  onMapClick(cb){ this._clickCb=cb; }
+};
+
+/* ============================================================================
+ * 5) LocationService — 실시간 GPS 스트림 (Mock, 위경도 기반, 옵저버 패턴)
+ *    - setTarget(latlng): 차량이 접근할 출발지 좌표 지정 → 경로(위경도) 재생성
+ *    - TODO(handoff): start()의 setInterval을 WS/Firebase 실시간 구독으로 교체
  * ========================================================================== */
 const LocationService = {
-  _subs:[], _timer:null, _t:0, _path:[], _spawn:[40,255],
+  _subs:[], _timer:null, _t:0, _path:[], _spawn:[12.2250,109.1780],
   subscribe(cb){ this._subs.push(cb); return ()=>{ this._subs=this._subs.filter(x=>x!==cb); }; },
   _emit(p){ this._subs.forEach(cb=>cb(p)); },
   _interp(a,b,n){ const out=[]; for(let i=1;i<=n;i++){ const k=i/n; out.push([a[0]+(b[0]-a[0])*k, a[1]+(b[1]-a[1])*k]); } return out; },
-  setTarget(point){ this._path=this._interp(this._spawn, point||[70,230], 7); },
-  start(){ this.stop(); this._t=0; if(!this._path.length) this.setTarget([70,230]); this._timer=setInterval(()=>this._tick(),900); this._tick(); },
-  _tick(){
-    const p=this._path, i=this._t;
+  setTarget(ll){ this._path=this._interp(this._spawn, ll||CONFIG.nhatrangCenter, 8); },
+  start(){ this.stop(); this._t=0; if(!this._path.length) this.setTarget(CONFIG.nhatrangCenter); this._timer=setInterval(()=>this._tick(),900); this._tick(); },
+  _tick(){ const p=this._path,i=this._t;
     if(i>=p.length){ this._emit({arrived:true,etaMin:0,point:p[p.length-1]}); this.stop(); return; }
-    const [x,y]=p[i]; let angle=0;
-    if(i<p.length-1){ const [nx,ny]=p[i+1]; angle=Math.atan2(ny-y,nx-x)*180/Math.PI; }
-    this._emit({arrived:false, etaMin:Math.max(1,p.length-i), point:[x,y], angle}); this._t++;
-  },
+    this._emit({arrived:false, etaMin:Math.max(1,p.length-i), point:p[i]}); this._t++; },
   stop(){ if(this._timer){ clearInterval(this._timer); this._timer=null; } }
 };
 
 /* ============================================================================
- * 5) MatchingService — 배차 상태 머신 (Mock)
- *    상태: idle→searching→assigned→enroute→onboard→done / cancelled·refunded·complaint
+ * 6) MatchingService — 배차 상태 머신 (Mock)
  * ========================================================================== */
 const MatchingService = {
   state:"idle", driver:null,
@@ -592,9 +580,9 @@ const MatchingService = {
 };
 
 /* ============================================================================
- * 6) PaymentService — PG 결제 추상 인터페이스 (확장 지점)
+ * 7) PaymentService — PG 결제 추상 인터페이스 (확장 지점)
  * ========================================================================== */
-class PaymentProvider{ constructor({key,labelKey,icon,enabled=true}){ Object.assign(this,{key,labelKey,icon,enabled}); } async process(p){ throw new Error("process() not implemented"); } }
+class PaymentProvider{ constructor({key,labelKey,icon,enabled=true}){ Object.assign(this,{key,labelKey,icon,enabled}); } async process(p){ throw new Error("not implemented"); } }
 class CashProvider extends PaymentProvider{ constructor(){ super({key:"cash",labelKey:"pay_cash",icon:"💵"}); } async process(p){ return {success:true,method:"cash",settle:"onsite",txId:null,amount:p.amount}; } }
 class GLNProvider extends PaymentProvider{ constructor(){ super({key:"gln",labelKey:"pay_gln",icon:"🟢"}); } async process(p){ return {success:true,method:"gln",txId:"GLN-MOCK-"+p.bookingId,amount:p.amount}; } }
 class TossPaymentsProvider extends PaymentProvider{ constructor(){ super({key:"toss",labelKey:"pay_toss",icon:"💙",enabled:false}); } async process(p){ return {success:true,method:"toss",txId:"TOSS-MOCK",amount:p.amount}; } }
@@ -606,44 +594,37 @@ const PaymentService = {
   register(p){ this._providers.set(p.key,p); return this; },
   list(){ return [...this._providers.values()]; },
   select(key){ const p=this._providers.get(key); if(p&&p.enabled) this.selected=key; },
-  async processPayment(payload){
-    const provider=this._providers.get(this.selected);
-    if(!provider) throw new Error("No payment provider selected");
-    if(!provider.enabled) throw new Error(`Provider '${provider.key}' not enabled`);
-    return { provider:provider.key, ...(await provider.process(payload)) };
-  }
+  async processPayment(payload){ const provider=this._providers.get(this.selected); if(!provider) throw new Error("no provider"); if(!provider.enabled) throw new Error("provider disabled"); return { provider:provider.key, ...(await provider.process(payload)) }; }
 };
-PaymentService.register(new CashProvider()).register(new GLNProvider())
-  .register(new TossPaymentsProvider()).register(new VNPAYProvider())
-  .register(new MomoProvider()).register(new InicisProvider());
+PaymentService.register(new CashProvider()).register(new GLNProvider()).register(new TossPaymentsProvider()).register(new VNPAYProvider()).register(new MomoProvider()).register(new InicisProvider());
 
 /* ============================================================================
- * 7) PhotoUploadService — 픽업 사진 (Firebase Storage 기반, Mock)
+ * 8) PhotoUploadService — 픽업 사진 (Firebase Storage 기반, Mock)
  * ========================================================================== */
 const PhotoUploadService = {
   _files:[],
   addLocal(fileList){ [...fileList].forEach(f=>this._files.push({name:f.name,size:f.size,previewUrl:URL.createObjectURL(f),storageUrl:null})); return this._files; },
-  async upload(){ return this._files.map(f=>({...f,storageUrl:`gs://k-taxi/pickups/mock/${encodeURIComponent(f.name)}`})); },
+  async upload(){ return this._files.map(f=>({...f,storageUrl:`gs://taxi-k/pickups/mock/${encodeURIComponent(f.name)}`})); },
   reset(){ this._files=[]; }
 };
 
 /* ============================================================================
- * 8) BookingService — 예약 페이로드 조립 + 서버 전송
+ * 9) BookingService — 예약 페이로드 조립 + 서버 전송
  * ========================================================================== */
 const BookingService = {
   _seq:1000, _id(){ return "KTX-"+new Date().getFullYear()+"-"+(++this._seq); },
   build(form){
     const v=form.vehicle||VehicleService.default();
     const fare=FareService.quote(form.origin.zoneId, form.dest.zoneId, {luggage:form.luggage, vehicleMult:v.mult});
-    const place=(p)=>({ placeId:p.id, name:p.name[I18nService.lang]||p.name.ko, zoneId:p.zoneId,
-                        zoneName:I18nService.zoneName(p.zoneId), coords:p.coords, typedAddress:!!p.typed });
+    const place=(p)=>({ placeId:p.id, name:p.name[I18nService.lang]||p.name.ko, zoneId:p.zoneId, zoneName:I18nService.zoneName(p.zoneId),
+                        lat:p.coords?p.coords[0]:null, lng:p.coords?p.coords[1]:null, typedAddress:!!p.typed, source:p.remote?"osm":(p.id&&p.id.startsWith("__")?p.id.slice(2):"poi") });
     return {
-      schemaVersion:"1.2", bookingId:this._id(), status:"REQUESTED", createdAt:new Date().toISOString(), locale:I18nService.lang,
+      schemaVersion:"1.3", bookingId:this._id(), status:"REQUESTED", createdAt:new Date().toISOString(), locale:I18nService.lang,
       customer:{channel:"hybrid-app",memberType:"guest"},
       trip:{ origin:place(form.origin), destination:place(form.dest),
              vehicle:{ classId:v.id, seats:v.seats, name:v.name[I18nService.lang]||v.name.ko, vehicleType:v.type, fareMultiplier:v.mult },
-             passengers:form.pax, largeLuggage:form.luggage, note:form.note||null, pickupPhotos:form.photos },
-      fare:{ currency:"VND", fixed:true, amountVnd:fare?.vnd??0, amountKrwApprox:fare?.krw??0, surchargeVnd:fare?.surcharge??0, distanceKm:fare?.distanceKm??0 },
+             passengers:form.pax, largeLuggage:form.luggage, note:form.note||null, pickupPhotos:form.photos, routeDistanceKm:form.routeKm??null },
+      fare:{ currency:"VND", fixed:true, amountVnd:fare?.vnd??0, amountKrwApprox:fare?.krw??0, surchargeVnd:fare?.surcharge??0, distanceKm:form.routeKm??fare?.distanceKm??0 },
       payment:{ method:PaymentService.selected, status:"PENDING" },
       dispatch:{ assignedDriverId:null, vehicleType:v.type, seats:v.seats, etaMin:null },
       admin:{ region:"NHA_TRANG", complaint:null, refund:null, settlement:{status:"UNSETTLED"} }
@@ -653,33 +634,28 @@ const BookingService = {
 };
 
 /* ============================================================================
- * 9) App — View 컨트롤러 (DOM 렌더 + Service 바인딩)
+ * 10) App — View 컨트롤러 (DOM 렌더 + Service 바인딩)
  * ========================================================================== */
 const App = {
-  els:{}, selectedOrigin:null, selectedDest:null, selectedVehicle:null, activeTarget:null, // 'origin' | 'dest'
-  recents:["muongthanh","lotte_mart"],   // TODO(handoff): 사용자별 최근 이용 저장소
+  els:{}, selectedOrigin:null, selectedDest:null, selectedVehicle:null, activeTarget:null,
+  recents:["muongthanh","lotte_mart"], _mapPickMode:false, _routeKm:null, _searchT:null, _remote:[], _remoteLoading:false,
   init(){
     this.cacheEls();
-    this.selectedVehicle=VehicleService.default();   // 기본: 7인승 리모 그린
+    this.selectedVehicle=VehicleService.default();
     this.renderPayments(); this.renderVehicles(); this.renderPax(); this.bindEvents();
     I18nService.apply(); this.updateFieldUI(); this.recalcFare();
-    this.bindLocationStream(); LocationService.start();
+    // 지도 초기화 + 실시간 스트림 바인딩
+    MapService.init();
+    MapService.onMapClick(ll=>this.onMapClicked(ll));
+    this.bindLocationStream();
   },
   cacheEls(){
     const $=id=>document.getElementById(id);
-    this.els={
-      fieldOrigin:$("fieldOrigin"), fieldDest:$("fieldDest"), swapBtn:$("swapBtn"),
-      pax:$("pax"), luggage:$("luggage"), note:$("note"),
-      payGrid:$("payGrid"), vehGrid:$("vehGrid"), fareVnd:$("fareVnd"), fareKrw:$("fareKrw"), distTxt:$("distTxt"),
-      console:$("console"), bookBtn:$("bookBtn"),
-      uploadBox:$("uploadBox"), photoInput:$("photoInput"), thumbs:$("thumbs"),
-      langSwitch:$("langSwitch"), toast:$("toast"),
-      carMarker:$("carMarker"), carRotate:$("carRotate"), etaPill:$("etaPill"),
-      originMarker:$("originMarker"), destMarker:$("destMarker"), routePath:$("routePath"),
-      // 검색 시트
-      searchModal:$("searchModal"), smBack:$("smBack"), smTitle:$("smTitle"), smInput:$("smInput"),
-      smBody:$("smBody"), actCurrent:$("actCurrent"), actMap:$("actMap")
-    };
+    this.els={ fieldOrigin:$("fieldOrigin"), fieldDest:$("fieldDest"), swapBtn:$("swapBtn"),
+      pax:$("pax"), luggage:$("luggage"), note:$("note"), payGrid:$("payGrid"), vehGrid:$("vehGrid"),
+      fareVnd:$("fareVnd"), fareKrw:$("fareKrw"), distTxt:$("distTxt"), console:$("console"), bookBtn:$("bookBtn"),
+      uploadBox:$("uploadBox"), photoInput:$("photoInput"), thumbs:$("thumbs"), langSwitch:$("langSwitch"), toast:$("toast"), etaPill:$("etaPill"),
+      searchModal:$("searchModal"), smBack:$("smBack"), smTitle:$("smTitle"), smInput:$("smInput"), smBody:$("smBody"), actCurrent:$("actCurrent"), actMap:$("actMap") };
   },
   renderPayments(){
     this.els.payGrid.innerHTML = PaymentService.list().map(p=>{
@@ -688,56 +664,34 @@ const App = {
       return `<div class="${cls}" data-pay="${p.key}" ${p.enabled?"":'data-disabled="1"'}><span class="ic">${p.icon}</span>${I18nService.t(p.labelKey)}${soon}</div>`;
     }).join("");
   },
-  /* 차량 등급 카드 렌더 — 경로 선택 시 인승별 예상요금, 미선택 시 등급 라벨 표시 */
   renderVehicles(){
     const hasRoute=this.selectedOrigin&&this.selectedDest;
     this.els.vehGrid.innerHTML = VehicleService.list().map(v=>{
       const active=this.selectedVehicle?.id===v.id?" active":"";
       let price;
-      if(hasRoute){
-        const q=FareService.quote(this.selectedOrigin.zoneId,this.selectedDest.zoneId,{luggage:+this.els.luggage.value, vehicleMult:v.mult});
-        price=`<div class="vprice">₫${(q?.vnd??0).toLocaleString(CONFIG.currencyLocale)}</div>`;
-      }else{
-        price=`<div class="vprice tag">${I18nService.t(v.tagKey)}</div>`;
-      }
-      return `<div class="veh-opt${active}" data-veh="${v.id}">
-          <span class="vic">${v.icon}</span>
-          <div class="vname">${this.escape(v.name[I18nService.lang]||v.name.ko)}</div>
-          <div class="vseat">${v.seats}${I18nService.t("seats_unit")}</div>${price}</div>`;
+      if(hasRoute){ const q=FareService.quote(this.selectedOrigin.zoneId,this.selectedDest.zoneId,{luggage:+this.els.luggage.value, vehicleMult:v.mult}); price=`<div class="vprice">₫${(q?.vnd??0).toLocaleString(CONFIG.currencyLocale)}</div>`; }
+      else { price=`<div class="vprice tag">${I18nService.t(v.tagKey)}</div>`; }
+      return `<div class="veh-opt${active}" data-veh="${v.id}"><span class="vic">${v.icon}</span><div class="vname">${this.escape(v.name[I18nService.lang]||v.name.ko)}</div><div class="vseat">${v.seats}${I18nService.t("seats_unit")}</div>${price}</div>`;
     }).join("");
   },
-  /* 탑승 인원 select — 선택 차량 인승만큼 옵션 생성(기존 값은 범위 내면 유지) */
-  renderPax(){
-    const max=this.selectedVehicle?.seats||7;
-    const prev=+(this.els.pax.value||0);
-    let opts=""; for(let i=1;i<=max;i++) opts+=`<option value="${i}">${i}</option>`;
-    this.els.pax.innerHTML=opts;
-    this.els.pax.value = (prev>=1&&prev<=max) ? prev : Math.min(2,max);
-  },
-  selectVehicle(id){
-    const v=VehicleService.get(id); if(!v) return;
-    this.selectedVehicle=v;
-    this.renderPax();       // 인승 상한 갱신
-    this.recalcFare();      // 요금/차량카드 갱신(내부에서 renderVehicles 호출)
-  },
+  renderPax(){ const max=this.selectedVehicle?.seats||7; const prev=+(this.els.pax.value||0); let o=""; for(let i=1;i<=max;i++) o+=`<option value="${i}">${i}</option>`; this.els.pax.innerHTML=o; this.els.pax.value=(prev>=1&&prev<=max)?prev:Math.min(2,max); },
+  selectVehicle(id){ const v=VehicleService.get(id); if(!v) return; this.selectedVehicle=v; this.renderPax(); this.recalcFare(); },
   bindEvents(){
     const e=this.els;
-    // 그랩 스타일 필드 → 검색 시트 오픈
     e.fieldOrigin.addEventListener("click",()=>this.openSearch("origin"));
     e.fieldDest.addEventListener("click",()=>this.openSearch("dest"));
     e.swapBtn.addEventListener("click",()=>this.swap());
-    // 검색 시트 이벤트
     e.smBack.addEventListener("click",()=>this.closeSearch());
-    e.smInput.addEventListener("input",()=>this.renderPlaceList(e.smInput.value));
-    e.actCurrent.addEventListener("click",()=>this.pick(PlacesService.current()));
-    e.actMap.addEventListener("click",()=>this.pick(PlacesService.mapPin()));
+    e.smInput.addEventListener("input",()=>this.onSearchInput(e.smInput.value));
+    e.actCurrent.addEventListener("click",()=>this.useCurrent());
+    e.actMap.addEventListener("click",()=>this.useMapPick());
     e.smBody.addEventListener("click",ev=>{
       const row=ev.target.closest("[data-poi]"); if(!row) return;
       const id=row.dataset.poi;
       if(id==="__typed"){ this.pick(PlacesService.customAddress(e.smInput.value.trim())); return; }
+      if(id.startsWith("osm_")){ const r=this._remote.find(x=>x.id===id); if(r) this.pick(r); return; }
       this.pick(PlacesService.get(id));
     });
-    // 탑승/결제/사진/언어/예약
     [e.pax,e.luggage].forEach(el=>el.addEventListener("change",()=>this.recalcFare()));
     e.payGrid.addEventListener("click",ev=>{ const o=ev.target.closest(".pay-opt"); if(!o||o.dataset.disabled) return; PaymentService.select(o.dataset.pay); this.renderPayments(); });
     e.vehGrid.addEventListener("click",ev=>{ const o=ev.target.closest(".veh-opt"); if(!o) return; this.selectVehicle(o.dataset.veh); });
@@ -747,98 +701,125 @@ const App = {
     e.bookBtn.addEventListener("click",()=>this.onBook());
   },
 
-  /* ---- 검색 시트 열기/닫기/선택 ---- */
+  /* ---- 검색 시트 ---- */
   openSearch(target){
     this.activeTarget=target;
-    this.els.smTitle.textContent = I18nService.t(target==="origin"?"sheet_title_origin":"sheet_title_dest");
-    this.els.smInput.value="";
+    this.els.smTitle.textContent=I18nService.t(target==="origin"?"sheet_title_origin":"sheet_title_dest");
+    this.els.smInput.value=""; this._remote=[]; this._remoteLoading=false;
     this.renderPlaceList("");
-    this.els.searchModal.classList.add("open");
-    this.els.searchModal.setAttribute("aria-hidden","false");
+    this.els.searchModal.classList.add("open"); this.els.searchModal.setAttribute("aria-hidden","false");
     setTimeout(()=>this.els.smInput.focus(),300);
   },
   closeSearch(){ this.els.searchModal.classList.remove("open"); this.els.searchModal.setAttribute("aria-hidden","true"); },
+  onSearchInput(q){
+    this._remote=[]; this.renderPlaceList(q);            // 즉시 큐레이션 결과
+    clearTimeout(this._searchT);
+    if(q.trim().length>=2){                              // 지도 검색은 디바운스 후
+      this._remoteLoading=true; this.renderPlaceList(q);
+      this._searchT=setTimeout(()=>{
+        PlacesService.searchRemote(q).then(list=>{
+          if(this.els.smInput.value.trim()!==q.trim()) return; // 최신 입력만 반영
+          this._remote=list; this._remoteLoading=false; this.renderPlaceList(q);
+        }).catch(()=>{ this._remoteLoading=false; this.renderPlaceList(q); });
+      },450);
+    }
+  },
   pick(poi){
     if(!poi) return;
     if(this.activeTarget==="origin") this.selectedOrigin=poi; else this.selectedDest=poi;
-    // 최근 이용 갱신(실제 POI만)
-    if(poi.id && !poi.id.startsWith("__")){ this.recents=[poi.id,...this.recents.filter(x=>x!==poi.id)].slice(0,4); }
+    if(poi.id && !poi.id.startsWith("__") && !poi.remote){ this.recents=[poi.id,...this.recents.filter(x=>x!==poi.id)].slice(0,4); }
     this.closeSearch(); this.updateFieldUI(); this.updateMapRoute(); this.recalcFare();
   },
   poiName(p){ return p ? (p.name[I18nService.lang]||p.name.ko||p.name.en) : ""; },
-
-  /* ---- 검색 시트 목록 렌더 ---- */
   renderPlaceList(query){
-    const q=(query||"").trim(); const T=I18nService.t.bind(I18nService); const esc=this.escape;
-    const row=(p)=>`<div class="poi-row${p.typed?" typed":""}" data-poi="${p.id}">
-        <div class="poi-ic">${p.cat}</div>
-        <div class="poi-meta"><div class="nm">${esc(this.poiName(p))}</div>
-        <div class="sb">${esc(I18nService.zoneName(p.zoneId))} · ${esc(p.hint||"")}</div></div></div>`;
+    const q=(query||"").trim(); const T=I18nService.t.bind(I18nService); const esc=this.escape.bind(this);
+    const row=(p,extra)=>`<div class="poi-row${extra||""}" data-poi="${p.id}"><div class="poi-ic">${p.cat}</div><div class="poi-meta"><div class="nm">${esc(this.poiName(p))}</div><div class="sb">${esc(I18nService.zoneName(p.zoneId))}${p.hint?(" · "+esc(p.hint)):""}</div></div></div>`;
     let html="";
     if(q){
       const results=PlacesService.search(q);
-      html += `<div class="sec-label">${T("sec_results")}</div>`;
-      html += results.length ? results.map(row).join("")
-              : `<div class="empty-msg">${T("no_results")}</div>`;
-      // 직접 입력(자유 주소) 옵션 — 타이핑한 그대로 사용
-      html += row(PlacesService.customAddress(q)).replace('class="nm">'+esc(q),'class="nm">“'+esc(q)+'”')
-              .replace(esc(I18nService.zoneName(PlacesService.classifyZone(q))), T("type_as_address")+" · "+esc(I18nService.zoneName(PlacesService.classifyZone(q))));
+      html+=`<div class="sec-label">${T("sec_results")}</div>`;
+      html+= results.length ? results.map(p=>row(p)).join("") : `<div class="empty-msg">${T("no_results")}</div>`;
+      // 지도(OSM) 검색 결과
+      html+=`<div class="sec-label">${T("sec_map")}${this._remoteLoading?' <span class="mini-spin"></span>':""}</div>`;
+      if(this._remote.length) html+=this._remote.map(p=>row(p," remote")).join("");
+      else if(!this._remoteLoading) html+=`<div class="empty-msg">${T("no_results")}</div>`;
+      // 직접 입력
+      html+=row(PlacesService.customAddress(q)," typed").replace(esc(I18nService.zoneName(PlacesService.classifyZone(q))), T("type_as_address")+" · "+esc(I18nService.zoneName(PlacesService.classifyZone(q))));
     }else{
-      // 인기 장소 칩
-      html += `<div class="sec-label">${T("sec_popular")}</div><div class="chips">`
-           + PlacesService.popular().map(p=>`<div class="chip" data-poi="${p.id}">${p.cat} ${esc(this.poiName(p))}</div>`).join("") + `</div>`;
-      // 최근 이용
+      html+=`<div class="sec-label">${T("sec_popular")}</div><div class="chips">`+PlacesService.popular().map(p=>`<div class="chip" data-poi="${p.id}">${p.cat} ${esc(this.poiName(p))}</div>`).join("")+`</div>`;
       const rec=this.recents.map(id=>PlacesService.get(id)).filter(Boolean);
-      if(rec.length){ html += `<div class="sec-label">${T("sec_recent")}</div>` + rec.map(row).join(""); }
-      // 전체 장소
-      html += `<div class="sec-label">${T("sec_all")}</div>` + PlacesService.POIS.map(row).join("");
+      if(rec.length) html+=`<div class="sec-label">${T("sec_recent")}</div>`+rec.map(p=>row(p)).join("");
+      html+=`<div class="sec-label">${T("sec_all")}</div>`+PlacesService.POIS.map(p=>row(p)).join("");
     }
     this.els.smBody.innerHTML=html;
   },
-
   swap(){ const o=this.selectedOrigin; this.selectedOrigin=this.selectedDest; this.selectedDest=o; this.updateFieldUI(); this.updateMapRoute(); this.recalcFare(); },
 
-  /* ---- 필드 UI 갱신 ---- */
+  /* ---- 현재 위치 / 지도에서 선택 ---- */
+  async useCurrent(){
+    this.toast(I18nService.t("locating"));
+    try{
+      const ll=await PlacesService.getCurrentLatLng();
+      const nm=await PlacesService.reverseName(ll);
+      this.pick({ id:"__current", cat:"📍", zoneId:PlacesService.nearestZone(ll), coords:ll, typed:false,
+                  name:{ko:nm||"현재 위치",en:nm||"Current location",vi:nm||"Vị trí hiện tại"}, hint:"GPS" });
+    }catch(e){
+      this.toast(I18nService.t("loc_denied"));
+      const ll=ZONE_CENTERS.city;
+      this.pick({ id:"__current", cat:"📍", zoneId:"city", coords:ll, typed:false, name:{ko:"현재 위치(대략)",en:"Current (approx)",vi:"Hiện tại (xấp xỉ)"}, hint:"city" });
+    }
+  },
+  useMapPick(){ this._mapPickMode=true; this._pickTarget=this.activeTarget; this.closeSearch(); this.toast(I18nService.t("map_pick_hint")); },
+  async onMapClicked(ll){
+    if(!this._mapPickMode) return; this._mapPickMode=false;
+    const nm=await PlacesService.reverseName(ll);
+    this.activeTarget=this._pickTarget||"origin";
+    this.pick({ id:"__mappin", cat:"🗺️", zoneId:PlacesService.nearestZone(ll), coords:ll, typed:false,
+                name:{ko:nm||"지도 지정 위치",en:nm||"Pinned location",vi:nm||"Vị trí đã ghim"}, hint:"pin" });
+  },
+
   updateFieldUI(){
-    const set=(fieldEl,poi)=>{
-      const b=fieldEl.querySelector("b"); const sub=fieldEl.querySelector(".sub");
-      if(poi){ b.textContent=this.poiName(poi); b.classList.remove("empty");
-               sub.hidden=false; sub.textContent=I18nService.zoneName(poi.zoneId)+(poi.hint?(" · "+poi.hint):""); }
-      else{ b.textContent=I18nService.t("tap_to_set"); b.classList.add("empty"); sub.hidden=true; }
-    };
-    set(this.els.fieldOrigin,this.selectedOrigin);
-    set(this.els.fieldDest,this.selectedDest);
+    const set=(fieldEl,poi)=>{ const b=fieldEl.querySelector("b"); const sub=fieldEl.querySelector(".sub");
+      if(poi){ b.textContent=this.poiName(poi); b.classList.remove("empty"); sub.hidden=false; sub.textContent=I18nService.zoneName(poi.zoneId)+(poi.hint?(" · "+poi.hint):""); }
+      else{ b.textContent=I18nService.t("tap_to_set"); b.classList.add("empty"); sub.hidden=true; } };
+    set(this.els.fieldOrigin,this.selectedOrigin); set(this.els.fieldDest,this.selectedDest);
   },
 
   /* ---- 지도: 마커/경로/차량 목표 갱신 ---- */
   updateMapRoute(){
-    const O=this.selectedOrigin?.coords || [70,230];
-    const D=this.selectedDest?.coords   || [300,70];
-    this.els.originMarker.setAttribute("transform",`translate(${O[0]},${O[1]})`);
-    this.els.destMarker.setAttribute("transform",`translate(${D[0]},${D[1]})`);
-    const cx=(O[0]+D[0])/2, cy=Math.min(O[1],D[1])-40;
-    this.els.routePath.setAttribute("d",`M${O[0]} ${O[1]} Q ${cx} ${cy} ${D[0]} ${D[1]}`);
-    // 차량이 새 출발지로 접근하도록 재생성
-    if(this.selectedOrigin?.coords){ LocationService.setTarget(O); LocationService.start(); }
+    const O=this.selectedOrigin?.coords, D=this.selectedDest?.coords;
+    if(O) MapService.setOrigin(O);
+    if(D) MapService.setDest(D);
+    this._routeKm=null;
+    if(O&&D){ MapService.drawRoute(O,D); MapService.fit(O,D); this.fetchRoute(O,D); }
+    else if(O) MapService.center(O);
+    if(O){ LocationService.setTarget(O); LocationService.start(); }
+  },
+  /* OSRM 실도로 경로/거리 (무료). 실패 시 직선 유지, 거리 정찰제 값 사용 */
+  async fetchRoute(O,D){
+    try{
+      const url=`https://router.project-osrm.org/route/v1/driving/${O[1]},${O[0]};${D[1]},${D[0]}?overview=full&geometries=geojson`;
+      const r=await fetch(url); if(!r.ok) return; const d=await r.json();
+      const rt=d.routes&&d.routes[0]; if(!rt) return;
+      const ll=rt.geometry.coordinates.map(c=>[c[1],c[0]]);
+      MapService.drawRoute(O,D,ll); MapService.fitPath(ll);
+      this._routeKm=Math.round(rt.distance/100)/10;
+      this.els.distTxt.textContent=this._routeKm+" km";
+    }catch(e){ /* 직선 폴백 유지 */ }
   },
 
   onLangChange(){ this.renderPayments(); this.renderVehicles(); this.updateFieldUI(); this.recalcFare(); if(this.els.searchModal.classList.contains("open")) this.renderPlaceList(this.els.smInput.value); },
-
   recalcFare(){
-    this.renderVehicles();  // 인승별 가격 라벨 최신화
-    if(!this.selectedOrigin||!this.selectedDest){
-      this.els.fareVnd.textContent="₫0"; this.els.fareKrw.textContent="≈ ₩0"; this.els.distTxt.textContent="-- km"; return;
-    }
-    const q=FareService.quote(this.selectedOrigin.zoneId, this.selectedDest.zoneId, {luggage:+this.els.luggage.value, vehicleMult:this.selectedVehicle?.mult||1});
+    this.renderVehicles();
+    if(!this.selectedOrigin||!this.selectedDest){ this.els.fareVnd.textContent="₫0"; this.els.fareKrw.textContent="≈ ₩0"; this.els.distTxt.textContent="-- km"; return; }
+    const q=FareService.quote(this.selectedOrigin.zoneId,this.selectedDest.zoneId,{luggage:+this.els.luggage.value, vehicleMult:this.selectedVehicle?.mult||1});
     this.els.fareVnd.textContent="₫"+(q?.vnd??0).toLocaleString(CONFIG.currencyLocale);
     this.els.fareKrw.textContent="≈ ₩"+(q?.krw??0).toLocaleString("ko-KR");
-    this.els.distTxt.textContent=(q?.distanceKm??0)+" km";
+    this.els.distTxt.textContent=(this._routeKm!=null?this._routeKm:(q?.distanceKm??0))+" km";
   },
-
   bindLocationStream(){
-    LocationService.subscribe(({arrived,etaMin,point,angle})=>{
-      if(point){ this.els.carMarker.setAttribute("transform",`translate(${point[0]},${point[1]})`);
-                 if(typeof angle==="number") this.els.carRotate.setAttribute("transform",`rotate(${angle})`); }
+    LocationService.subscribe(({arrived,etaMin,point})=>{
+      if(point) MapService.moveDriver(point);
       this.els.etaPill.textContent = arrived ? ("🎉 "+(I18nService.lang==="ko"?"도착":I18nService.lang==="vi"?"Đã đến":"Arrived")) : "ETA "+etaMin+"m";
     });
   },
@@ -850,27 +831,19 @@ const App = {
       const photos=await PhotoUploadService.upload();
       const form={ origin:this.selectedOrigin, dest:this.selectedDest, vehicle:this.selectedVehicle,
                    pax:+this.els.pax.value, luggage:+this.els.luggage.value, note:this.els.note.value.trim(),
-                   photos:photos.map(f=>({name:f.name,storageUrl:f.storageUrl})) };
+                   routeKm:this._routeKm, photos:photos.map(f=>({name:f.name,storageUrl:f.storageUrl})) };
       const payload=BookingService.build(form);
       const pay=await PaymentService.processPayment({amount:payload.fare.amountVnd,currency:"VND",bookingId:payload.bookingId});
       payload.payment={ method:pay.provider, status:pay.success?"PAID_OR_ONSITE":"FAILED", txId:pay.txId??null, settle:pay.settle??"gateway" };
       const driver=await MatchingService.request();
       payload.status="ASSIGNED";
-      payload.dispatch={ assignedDriverId:driver.id, driverName:driver.nameKo, vehicle:driver.car, plate:driver.plate, rating:driver.rating,
-                         vehicleType:this.selectedVehicle.type, seats:this.selectedVehicle.seats, etaMin:6 };
+      payload.dispatch={ assignedDriverId:driver.id, driverName:driver.nameKo, vehicle:driver.car, plate:driver.plate, rating:driver.rating, vehicleType:this.selectedVehicle.type, seats:this.selectedVehicle.seats, etaMin:6 };
       const ack=await BookingService.submit(payload);
       this.logPayload(payload,ack); this.toast(I18nService.t("toast_booked"));
     }catch(err){ this.logError(err); }
     finally{ this.els.bookBtn.disabled=false; }
   },
-
-  logPayload(payload,ack){
-    this.els.console.innerHTML =
-      `<pre><span class="muted">// → POST /api/bookings  (기사앱 FCM 트리거 + Admin 실시간 반영)</span>\n`
-      + `<span class="muted">// server ack: ${this.escape(JSON.stringify(ack))}</span>\n\n`
-      + this.escape(JSON.stringify(payload,null,2)) + `</pre>`;
-    this.els.console.scrollTop=0;
-  },
+  logPayload(payload,ack){ this.els.console.innerHTML=`<pre><span class="muted">// → POST /api/bookings  (기사앱 FCM 트리거 + Admin 실시간 반영)</span>\n<span class="muted">// server ack: ${this.escape(JSON.stringify(ack))}</span>\n\n`+this.escape(JSON.stringify(payload,null,2))+`</pre>`; this.els.console.scrollTop=0; },
   logError(err){ this.els.console.innerHTML=`<pre style="color:var(--danger)">// ERROR\n${this.escape(String(err&&err.stack||err))}</pre>`; },
   escape(s){ return String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c])); },
   toast(msg){ const t=this.els.toast; t.textContent=msg; t.classList.add("show"); clearTimeout(this._tt); this._tt=setTimeout(()=>t.classList.remove("show"),2600); }
