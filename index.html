@@ -110,6 +110,9 @@ textarea{resize:vertical;min-height:64px;}
 .loc-text b.empty{color:var(--muted);font-weight:600;}
 .loc-text .sub{display:block;font-size:11px;color:var(--muted);font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;}
 .route-connector{position:absolute;left:19px;top:38px;bottom:38px;width:0;border-left:2px dotted var(--line);}
+.route-summary{display:flex;justify-content:space-around;gap:10px;margin-top:12px;padding:11px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius-sm);font-size:12px;color:var(--muted);}
+.route-summary b{color:var(--lime);font-size:14px;margin-left:5px;}
+.route-summary .rs-ic{margin-right:5px;}
 .swap-btn{position:absolute;right:12px;top:50%;transform:translateY(-50%);width:36px;height:36px;border-radius:50%;background:var(--surface);border:1px solid var(--line);color:var(--lime);font-size:16px;cursor:pointer;display:grid;place-items:center;z-index:2;transition:.15s;}
 .swap-btn:active{transform:translateY(-50%) rotate(180deg);}
 
@@ -236,6 +239,11 @@ details.dev code{background:#000;padding:1px 6px;border-radius:5px;color:var(--e
         </button>
         <button class="swap-btn" id="swapBtn" type="button" aria-label="swap">⇅</button>
       </div>
+      <!-- 출발→목적지 총 거리 · 예상 소요시간 (경로 지정 시 표시) -->
+      <div class="route-summary" id="routeSummary" hidden>
+        <span><span class="rs-ic">🛣️</span><span data-i18n="total_distance">총 거리</span><b id="rsDist">-- km</b></span>
+        <span><span class="rs-ic">⏱️</span><span data-i18n="est_time">예상 소요</span><b id="rsTime">-- 분</b></span>
+      </div>
       <div class="field" style="margin-top:12px">
         <label class="lbl" data-i18n="photo">상세 위치 사진 (선택 · 픽업지점 인증)</label>
         <div class="upload" id="uploadBox"><div style="font-size:22px">📸</div><div data-i18n="photo_hint">탭하여 픽업 위치 사진을 첨부하세요</div></div>
@@ -342,6 +350,7 @@ const DICT = {
     ph_note:"예) 유아용 카시트 필요 / 공항 도착층에서 픽업",
     section_pay:"결제수단", pay_hint:"현장 결제(현금·GLN) 즉시 지원 · 온라인 PG는 순차 오픈",
     section_fare:"예상 요금 (정찰제)", distance:"거리", fare_note:"구역 간 고정 요금이 적용되어 미터기 요금 흥정이 없습니다.",
+    total_distance:"총 거리", est_time:"예상 소요", minute_unit:"분",
     section_log:"서버 전송 데이터 (기사앱/Admin)",
     log_empty:"[예약하기]를 누르면 기사용/관리자용 서버로 전송될 JSON 페이로드가 여기에 출력됩니다.",
     book:"예약하기", dev_title:"🛠 개발자 인수인계 노트 (아키텍처 / 교체 지점)",
@@ -363,6 +372,7 @@ const DICT = {
     ph_note:"e.g. Baby car seat / pick up at arrivals",
     section_pay:"Payment", pay_hint:"Cash & GLN on-site now · online PG rolling out",
     section_fare:"Fixed fare estimate", distance:"Distance", fare_note:"Zone-to-zone fixed pricing — no meter, no haggling.",
+    total_distance:"Total distance", est_time:"Est. time", minute_unit:"min",
     section_log:"Server payload (Driver/Admin)",
     log_empty:"Press [Book] to preview the JSON payload sent to the Driver/Admin servers.",
     book:"Book now", dev_title:"🛠 Developer handoff notes (architecture / swap points)",
@@ -384,6 +394,7 @@ const DICT = {
     ph_note:"vd) Cần ghế em bé / đón ở ga đến",
     section_pay:"Thanh toán", pay_hint:"Tiền mặt & GLN tại chỗ · PG online sắp có",
     section_fare:"Giá cố định dự kiến", distance:"Khoảng cách", fare_note:"Giá cố định theo khu — không đồng hồ, không mặc cả.",
+    total_distance:"Tổng quãng đường", est_time:"Thời gian", minute_unit:"phút",
     section_log:"Dữ liệu gửi server (Tài xế/Admin)",
     log_empty:"Nhấn [Đặt xe] để xem JSON gửi tới server.",
     book:"Đặt xe", dev_title:"🛠 Ghi chú bàn giao (kiến trúc / điểm thay thế)",
@@ -654,6 +665,7 @@ const App = {
     this.els={ fieldOrigin:$("fieldOrigin"), fieldDest:$("fieldDest"), swapBtn:$("swapBtn"),
       pax:$("pax"), luggage:$("luggage"), note:$("note"), payGrid:$("payGrid"), vehGrid:$("vehGrid"),
       fareVnd:$("fareVnd"), fareKrw:$("fareKrw"), distTxt:$("distTxt"), console:$("console"), bookBtn:$("bookBtn"),
+      routeSummary:$("routeSummary"), rsDist:$("rsDist"), rsTime:$("rsTime"),
       uploadBox:$("uploadBox"), photoInput:$("photoInput"), thumbs:$("thumbs"), langSwitch:$("langSwitch"), toast:$("toast"), etaPill:$("etaPill"),
       searchModal:$("searchModal"), smBack:$("smBack"), smTitle:$("smTitle"), smInput:$("smInput"), smBody:$("smBody"), actCurrent:$("actCurrent"), actMap:$("actMap") };
   },
@@ -790,12 +802,28 @@ const App = {
     const O=this.selectedOrigin?.coords, D=this.selectedDest?.coords;
     if(O) MapService.setOrigin(O);
     if(D) MapService.setDest(D);
-    this._routeKm=null;
-    if(O&&D){ MapService.drawRoute(O,D); MapService.fit(O,D); this.fetchRoute(O,D); }
-    else if(O) MapService.center(O);
+    this._routeKm=null; this._routeMin=null;
+    if(O&&D){
+      // 근사값 즉시 표시(정찰제 구역 거리 기반) → OSRM 실측 도착 시 덮어씀
+      const q=FareService.quote(this.selectedOrigin.zoneId,this.selectedDest.zoneId,{});
+      const km=q?.distanceKm||0;
+      this._routeKm=km; this._routeMin=Math.round(km*1.8); // 도심 평균 속도 근사(≈33km/h)
+      this.updateRouteSummary(km,this._routeMin);
+      MapService.drawRoute(O,D); MapService.fit(O,D); this.fetchRoute(O,D);
+    }else{
+      this.updateRouteSummary(null);
+      if(O) MapService.center(O);
+    }
     if(O){ LocationService.setTarget(O); LocationService.start(); }
   },
-  /* OSRM 실도로 경로/거리 (무료). 실패 시 직선 유지, 거리 정찰제 값 사용 */
+  /* 총 거리·예상 소요시간 배너 갱신 */
+  updateRouteSummary(km,min){
+    if(km==null){ this.els.routeSummary.hidden=true; return; }
+    this.els.routeSummary.hidden=false;
+    this.els.rsDist.textContent=km+" km";
+    this.els.rsTime.textContent="~"+min+" "+I18nService.t("minute_unit");
+  },
+  /* OSRM 실도로 경로/거리/시간 (무료). 실패 시 근사값 유지 */
   async fetchRoute(O,D){
     try{
       const url=`https://router.project-osrm.org/route/v1/driving/${O[1]},${O[0]};${D[1]},${D[0]}?overview=full&geometries=geojson`;
@@ -803,12 +831,14 @@ const App = {
       const rt=d.routes&&d.routes[0]; if(!rt) return;
       const ll=rt.geometry.coordinates.map(c=>[c[1],c[0]]);
       MapService.drawRoute(O,D,ll); MapService.fitPath(ll);
-      this._routeKm=Math.round(rt.distance/100)/10;
+      this._routeKm=Math.round(rt.distance/100)/10;         // km (소수1자리)
+      this._routeMin=Math.max(1,Math.round(rt.duration/60)); // 분
       this.els.distTxt.textContent=this._routeKm+" km";
-    }catch(e){ /* 직선 폴백 유지 */ }
+      this.updateRouteSummary(this._routeKm,this._routeMin);
+    }catch(e){ /* 근사값 유지 */ }
   },
 
-  onLangChange(){ this.renderPayments(); this.renderVehicles(); this.updateFieldUI(); this.recalcFare(); if(this.els.searchModal.classList.contains("open")) this.renderPlaceList(this.els.smInput.value); },
+  onLangChange(){ this.renderPayments(); this.renderVehicles(); this.updateFieldUI(); this.recalcFare(); if(this._routeKm!=null) this.updateRouteSummary(this._routeKm,this._routeMin); if(this.els.searchModal.classList.contains("open")) this.renderPlaceList(this.els.smInput.value); },
   recalcFare(){
     this.renderVehicles();
     if(!this.selectedOrigin||!this.selectedDest){ this.els.fareVnd.textContent="₫0"; this.els.fareKrw.textContent="≈ ₩0"; this.els.distTxt.textContent="-- km"; return; }
