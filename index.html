@@ -44,14 +44,15 @@
   --grad-cta:linear-gradient(135deg,var(--lime),var(--emerald));
 }
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
-html,body{margin:0;height:100%;}
+html,body{margin:0;}
 body{
   background:radial-gradient(1200px 600px at 50% -10%,#16181500,#000 70%),var(--bg);
   color:var(--text);
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR","Apple SD Gothic Neo",Roboto,sans-serif;
-  display:flex;justify-content:center;
+  display:flex;justify-content:center;align-items:flex-start;min-height:100vh;
 }
-.app{width:100%;max-width:430px;min-height:100vh;background:var(--bg);position:relative;display:flex;flex-direction:column;overflow:hidden;}
+/* overflow:hidden 제거 → 콘텐츠가 길어지면 문서(body)가 정상 스크롤됨 */
+.app{width:100%;max-width:430px;min-height:100vh;background:var(--bg);position:relative;display:flex;flex-direction:column;}
 
 /* ---- 상단 앱바 + 언어 스위처 ---- */
 .appbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;justify-content:space-between;padding:14px 18px;background:linear-gradient(180deg,#000 40%,#0000);}
@@ -103,8 +104,9 @@ textarea{resize:vertical;min-height:64px;}
 .swap-btn:active{transform:translateY(-50%) rotate(180deg);}
 
 /* 검색 시트(전체화면 오버레이) */
-.search-modal{position:absolute;inset:0;z-index:50;background:var(--bg);display:flex;flex-direction:column;transform:translateY(100%);transition:transform .28s cubic-bezier(.4,0,.2,1);will-change:transform;}
-.search-modal.open{transform:translateY(0);}
+/* 화면 고정(fixed) 오버레이 — .app 스크롤 높이에 영향 주지 않도록 분리, 앱 폭(430px)에 맞춰 중앙 정렬 */
+.search-modal{position:fixed;top:0;bottom:0;left:50%;width:100%;max-width:430px;z-index:50;background:var(--bg);display:flex;flex-direction:column;transform:translate(-50%,100%);transition:transform .28s cubic-bezier(.4,0,.2,1);will-change:transform;}
+.search-modal.open{transform:translate(-50%,0);}
 .sm-head{padding:14px 14px 10px;background:var(--surface);border-bottom:1px solid var(--line);}
 .sm-top{display:flex;align-items:center;gap:10px;margin-bottom:12px;}
 .sm-back{width:34px;height:34px;border-radius:10px;border:1px solid var(--line);background:var(--surface-2);color:var(--text);font-size:18px;cursor:pointer;flex:0 0 auto;}
