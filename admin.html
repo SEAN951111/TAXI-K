@@ -1,0 +1,581 @@
+<!DOCTYPE html>
+<!--
+================================================================================
+ 택시케이 (Taxi-K) · 관리자(Admin) 콘솔 — Single File Edition
+--------------------------------------------------------------------------------
+ [목적] 개발자가 아니어도 "현재 시스템 전체"를 폼으로 수정할 수 있는 노코드 콘솔.
+   - 설정 편집: 요금(정찰제 매트릭스) · 차량 등급 · 장소(POI) · 결제수단 · 브랜딩/색상 · 다국어 문구
+   - 운영 모니터링: 대시보드(KPI/매출) · 배차 관리 · 기사 관리 · 컴플레인
+   - 인계 편의: 모든 설정을 JSON으로 내보내기/가져오기 (백엔드 연동 전 임시 저장 수단)
+
+ [인수인계 메모]
+   - 지금은 브라우저 메모리(AdminState) 기반 프로토타입입니다. 새로고침하면 초기값으로 돌아갑니다.
+     (브라우저 저장소 미사용 — 데이터는 "내보내기"로 파일 저장하세요.)
+   - 실서비스 전환 시: AdminState CRUD 함수들의 저장 지점(saveState 호출부)을
+     REST/GraphQL API 또는 Firebase 쓰기로 교체하면 됩니다. 화면/폼은 그대로 재사용.
+   - 소비자앱(index.html)은 이 설정(JSON)을 읽어 동작하도록 연결하는 것이 다음 단계입니다.
+================================================================================
+-->
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>택시케이 Admin · 관리자 콘솔</title>
+<style>
+:root{
+  --bg:#0b0c0b; --surface:#111111; --surface-2:#1a1c1a; --surface-3:#202320; --line:#2a2d2a;
+  --lime:#b6ff3a; --emerald:#12c67a; --emerald-deep:#0a8f57;
+  --text:#f3f5f2; --muted:#8b928a; --danger:#ff5a5f; --warn:#ffcf4d; --info:#5ac8fa;
+  --radius:16px; --radius-sm:10px; --grad:linear-gradient(135deg,var(--lime),var(--emerald));
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+html,body{margin:0;height:100%;}
+body{background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans KR",Roboto,sans-serif;font-size:14px;}
+a{color:var(--emerald);}
+button{font-family:inherit;cursor:pointer;}
+input,select,textarea{font-family:inherit;background:var(--surface-2);border:1px solid var(--line);color:var(--text);border-radius:var(--radius-sm);padding:9px 11px;font-size:13px;outline:none;width:100%;}
+input:focus,select:focus,textarea:focus{border-color:var(--emerald);box-shadow:0 0 0 3px rgba(18,198,122,.15);}
+.btn{border:1px solid var(--line);background:var(--surface-2);color:var(--text);border-radius:var(--radius-sm);padding:9px 14px;font-weight:700;font-size:13px;}
+.btn:hover{border-color:var(--emerald);}
+.btn.primary{background:var(--grad);color:#06210f;border:0;}
+.btn.danger{color:var(--danger);border-color:#4a2a2c;}
+.btn.sm{padding:6px 10px;font-size:12px;}
+
+/* 레이아웃: 좌측 사이드바 + 본문 */
+.layout{display:flex;min-height:100vh;}
+.sidebar{width:230px;flex:0 0 auto;background:var(--surface);border-right:1px solid var(--line);padding:16px 12px;position:sticky;top:0;height:100vh;overflow-y:auto;}
+.brand{display:flex;align-items:center;gap:10px;padding:6px 8px 16px;font-weight:800;}
+.brand .logo{width:32px;height:32px;border-radius:9px;background:var(--grad);display:grid;place-items:center;color:#06210f;font-weight:900;}
+.brand small{display:block;color:var(--muted);font-weight:600;font-size:11px;}
+.nav{display:flex;flex-direction:column;gap:2px;}
+.nav button{display:flex;align-items:center;gap:10px;width:100%;text-align:left;border:0;background:transparent;color:var(--muted);padding:10px 12px;border-radius:var(--radius-sm);font-weight:700;font-size:13px;}
+.nav button .ic{width:18px;text-align:center;}
+.nav button:hover{background:var(--surface-2);color:var(--text);}
+.nav button.active{background:rgba(18,198,122,.12);color:var(--text);}
+.nav .sep{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px;padding:14px 12px 6px;font-weight:800;}
+
+.main{flex:1;min-width:0;display:flex;flex-direction:column;}
+.topbar{position:sticky;top:0;z-index:20;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 22px;background:rgba(11,12,11,.9);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);}
+.topbar h1{font-size:17px;margin:0;}
+.topbar .actions{display:flex;gap:8px;flex-wrap:wrap;}
+.content{padding:22px;max-width:1100px;width:100%;}
+.pane{display:none;}
+.pane.active{display:block;animation:fade .2s;}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
+.pane h2{font-size:16px;margin:0 0 4px;}
+.pane .desc{color:var(--muted);font-size:12px;margin:0 0 18px;line-height:1.6;}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:18px;margin-bottom:16px;}
+.card h3{margin:0 0 14px;font-size:14px;display:flex;align-items:center;gap:8px;}
+.card h3 .k{width:5px;height:15px;border-radius:3px;background:var(--grad);}
+.card h3 .sp{flex:1;}
+
+/* KPI 타일 */
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:16px;}
+.kpi{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px;}
+.kpi .label{font-size:12px;color:var(--muted);font-weight:700;}
+.kpi .val{font-size:26px;font-weight:900;margin-top:6px;}
+.kpi .val.lime{color:var(--lime);}
+.kpi .sub{font-size:11px;color:var(--muted);margin-top:4px;}
+
+/* 막대 차트(단일 계열) */
+.bars{display:flex;align-items:flex-end;gap:10px;height:150px;padding-top:10px;}
+.bar-col{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;height:100%;justify-content:flex-end;}
+.bar{width:70%;max-width:34px;background:var(--emerald);border-radius:4px 4px 0 0;transition:.3s;}
+.bar-col:hover .bar{background:var(--lime);}
+.bar-x{font-size:11px;color:var(--muted);}
+.bar-v{font-size:10px;color:var(--muted);}
+
+/* 테이블 */
+.tbl{width:100%;border-collapse:collapse;font-size:13px;}
+.tbl th{text-align:left;color:var(--muted);font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:.4px;padding:8px 10px;border-bottom:1px solid var(--line);}
+.tbl td{padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:middle;}
+.tbl tr:hover td{background:var(--surface-2);}
+.tbl .num{text-align:right;font-variant-numeric:tabular-nums;}
+.scroll-x{overflow-x:auto;}
+
+/* 상태 배지 */
+.pill{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:800;border:1px solid transparent;}
+.pill::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;}
+.st-REQUESTED{color:var(--warn);background:rgba(255,207,77,.12);}
+.st-ASSIGNED{color:var(--info);background:rgba(90,200,250,.12);}
+.st-ENROUTE{color:var(--emerald);background:rgba(18,198,122,.12);}
+.st-ONBOARD{color:var(--lime);background:rgba(182,255,58,.12);}
+.st-DONE{color:#9aa39a;background:rgba(154,163,154,.1);}
+.st-CANCELLED{color:var(--danger);background:rgba(255,90,95,.12);}
+.st-OPEN{color:var(--danger);background:rgba(255,90,95,.12);}
+.st-RESOLVED{color:var(--emerald);background:rgba(18,198,122,.12);}
+.st-online{color:var(--emerald);background:rgba(18,198,122,.12);}
+.st-offline{color:#9aa39a;background:rgba(154,163,154,.1);}
+
+/* 폼 그리드 */
+.grid{display:grid;gap:10px;}
+.grid.c2{grid-template-columns:1fr 1fr;}
+.grid.c3{grid-template-columns:1fr 1fr 1fr;}
+.grid.c4{grid-template-columns:repeat(4,1fr);}
+label.lbl{display:block;font-size:11px;color:var(--muted);font-weight:700;margin-bottom:5px;}
+.row-actions{display:flex;gap:6px;}
+.hint{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.5;}
+.tag{display:inline-block;font-size:10px;color:var(--warn);border:1px solid #4a4326;border-radius:5px;padding:1px 6px;margin-left:6px;}
+
+/* 요금 매트릭스 */
+.matrix{border-collapse:collapse;font-size:12px;min-width:640px;}
+.matrix th,.matrix td{border:1px solid var(--line);padding:4px;text-align:center;}
+.matrix th{background:var(--surface-2);color:var(--muted);font-weight:700;position:sticky;}
+.matrix input{width:78px;text-align:right;padding:6px;font-size:12px;}
+.matrix .diag{background:var(--surface-3);color:var(--muted);}
+
+/* 언어 탭 */
+.lang-tabs{display:flex;gap:6px;margin-bottom:12px;}
+.lang-tabs button{border:1px solid var(--line);background:var(--surface-2);color:var(--muted);border-radius:999px;padding:6px 14px;font-weight:700;font-size:12px;}
+.lang-tabs button.active{background:var(--grad);color:#06210f;border:0;}
+
+/* 토스트 */
+.toast{position:fixed;right:22px;bottom:22px;background:var(--surface);border:1px solid var(--emerald);color:var(--text);padding:12px 18px;border-radius:12px;font-weight:700;font-size:13px;opacity:0;transform:translateY(12px);transition:.25s;z-index:100;}
+.toast.show{opacity:1;transform:translateY(0);}
+
+.color-row{display:flex;align-items:center;gap:10px;}
+.color-row input[type=color]{width:46px;height:38px;padding:2px;cursor:pointer;}
+.mono{font-family:ui-monospace,Menlo,Consolas,monospace;}
+textarea.json{min-height:320px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.5;white-space:pre;}
+
+/* 모바일 대응 */
+@media(max-width:860px){
+  .layout{flex-direction:column;}
+  .sidebar{width:100%;height:auto;position:static;border-right:0;border-bottom:1px solid var(--line);}
+  .nav{flex-direction:row;flex-wrap:wrap;}
+  .nav .sep{width:100%;}
+  .kpis{grid-template-columns:repeat(2,1fr);}
+  .grid.c4,.grid.c3{grid-template-columns:1fr 1fr;}
+}
+</style>
+</head>
+<body>
+<div class="layout">
+  <!-- 사이드바 -->
+  <aside class="sidebar">
+    <div class="brand"><div class="logo">K</div><div>택시케이 Admin<small>Nha Trang · 관리자</small></div></div>
+    <nav class="nav" id="nav">
+      <div class="sep">운영</div>
+      <button data-pane="dashboard" class="active"><span class="ic">📊</span>대시보드</button>
+      <button data-pane="dispatch"><span class="ic">🚕</span>배차 관리</button>
+      <button data-pane="drivers"><span class="ic">🧑‍✈️</span>기사 관리</button>
+      <button data-pane="complaints"><span class="ic">📮</span>컴플레인</button>
+      <div class="sep">설정 (노코드 수정)</div>
+      <button data-pane="fares"><span class="ic">💰</span>요금 설정</button>
+      <button data-pane="vehicles"><span class="ic">🚗</span>차량 관리</button>
+      <button data-pane="places"><span class="ic">📍</span>장소 관리</button>
+      <button data-pane="payments"><span class="ic">💳</span>결제수단</button>
+      <button data-pane="branding"><span class="ic">🎨</span>브랜딩/디자인</button>
+      <button data-pane="i18n"><span class="ic">🌐</span>다국어 문구</button>
+      <div class="sep">시스템</div>
+      <button data-pane="config"><span class="ic">🗄️</span>설정 내보내기/가져오기</button>
+    </nav>
+  </aside>
+
+  <div class="main">
+    <div class="topbar">
+      <h1 id="paneTitle">대시보드</h1>
+      <div class="actions">
+        <button class="btn sm" id="btnPreview">↗ 소비자앱 미리보기</button>
+        <button class="btn sm" id="btnExportTop">⬇ 설정 내보내기</button>
+        <button class="btn sm primary" id="btnSaveAll">💾 변경사항 저장</button>
+      </div>
+    </div>
+    <div class="content">
+      <div class="pane active" id="pane-dashboard"></div>
+      <div class="pane" id="pane-dispatch"></div>
+      <div class="pane" id="pane-drivers"></div>
+      <div class="pane" id="pane-complaints"></div>
+      <div class="pane" id="pane-fares"></div>
+      <div class="pane" id="pane-vehicles"></div>
+      <div class="pane" id="pane-places"></div>
+      <div class="pane" id="pane-payments"></div>
+      <div class="pane" id="pane-branding"></div>
+      <div class="pane" id="pane-i18n"></div>
+      <div class="pane" id="pane-config"></div>
+    </div>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+<input type="file" id="importFile" accept="application/json" hidden>
+
+<script>
+"use strict";
+/* ============================================================================
+ * AdminState — 현재 시스템 전체 설정 + 운영 데이터 (단일 소스)
+ *   소비자앱과 동일한 기본값으로 시드. 여기서 수정 → 내보내기(JSON) → 앱에 연결.
+ * ========================================================================== */
+const ZONE_IDS = ["airport","city","vinwonders","beach","nhatrang_s","honchong"];
+const AdminState = {
+  branding:{ appName:"택시케이", pointColor:"#b6ff3a", accent:"#12c67a", defaultLang:"ko", mapProvider:"osm", vndToKrw:0.056 },
+  zones:{ airport:"깜란 국제공항", city:"시내 중심가", vinwonders:"빈원더스/빈펄", beach:"북부 해변", nhatrang_s:"나트랑 남부", honchong:"혼쫑 곶" },
+  fares:{
+    sameZone:60000, luggageSurcharge:40000, luggageThreshold:4,
+    matrix:{
+      airport:{city:380000,vinwonders:250000,beach:180000,nhatrang_s:420000,honchong:410000},
+      city:{airport:380000,vinwonders:300000,beach:350000,nhatrang_s:120000,honchong:90000},
+      vinwonders:{airport:250000,city:300000,beach:320000,nhatrang_s:330000,honchong:340000},
+      beach:{airport:180000,city:350000,vinwonders:320000,nhatrang_s:400000,honchong:390000},
+      nhatrang_s:{airport:420000,city:120000,vinwonders:330000,beach:400000,honchong:150000},
+      honchong:{airport:410000,city:90000,vinwonders:340000,beach:390000,nhatrang_s:150000}
+    }
+  },
+  vehicles:[
+    {id:"sedan4",name:"4인승 세단",seats:4,mult:1.0,icon:"🚗",type:"VINFAST_SEDAN_4"},
+    {id:"limo7",name:"7인승 리모 그린",seats:7,mult:1.35,icon:"✨",type:"VINFAST_LIMO_GREEN_7"},
+    {id:"van16",name:"16인승 밴",seats:16,mult:2.0,icon:"🚐",type:"VAN_16"}
+  ],
+  places:[
+    {id:"airport",nameKo:"깜란 국제공항",nameEn:"Cam Ranh Airport",nameVi:"Sân bay Cam Ranh",zone:"airport",lat:11.9985,lng:109.2193},
+    {id:"vinwonders",nameKo:"빈원더스 나트랑",nameEn:"VinWonders",nameVi:"VinWonders",zone:"vinwonders",lat:12.2140,lng:109.2530},
+    {id:"nhatrang_beach",nameKo:"나트랑 비치",nameEn:"Nha Trang Beach",nameVi:"Biển Nha Trang",zone:"city",lat:12.2388,lng:109.1965},
+    {id:"muongthanh",nameKo:"무엉탄 럭셔리",nameEn:"Muong Thanh Luxury",nameVi:"Mường Thanh",zone:"city",lat:12.2360,lng:109.1950},
+    {id:"hon_chong",nameKo:"혼쫑 곶",nameEn:"Hon Chong",nameVi:"Hòn Chồng",zone:"honchong",lat:12.2670,lng:109.2050},
+    {id:"night_market",nameKo:"나트랑 야시장",nameEn:"Night Market",nameVi:"Chợ đêm",zone:"city",lat:12.2360,lng:109.1955}
+  ],
+  payments:[
+    {key:"cash",label:"현금",enabled:true},
+    {key:"gln",label:"GLN",enabled:true},
+    {key:"toss",label:"토스페이먼츠",enabled:false},
+    {key:"inicis",label:"이니시스",enabled:false},
+    {key:"vnpay",label:"VNPAY",enabled:false},
+    {key:"momo",label:"Momo",enabled:false}
+  ],
+  i18n:{
+    ko:{ brand:"택시케이", section_route:"경로 지정", book:"예약하기", section_fare:"예상 요금 (정찰제)" },
+    en:{ brand:"Taxi-K", section_route:"Route", book:"Book now", section_fare:"Fixed fare estimate" },
+    vi:{ brand:"Taxi-K", section_route:"Lộ trình", book:"Đặt xe", section_fare:"Giá cố định" }
+  },
+  drivers:[
+    {id:"DRV-0427",name:"Nguyen Van A",car:"VinFast Limo Green",plate:"79A-888.88",rating:4.95,status:"online"},
+    {id:"DRV-0431",name:"Tran Van B",car:"VinFast Sedan",plate:"79A-123.45",rating:4.88,status:"online"},
+    {id:"DRV-0455",name:"Le Thi C",car:"16인승 Van",plate:"79B-777.99",rating:4.91,status:"offline"}
+  ],
+  bookings:[
+    {id:"KTX-2026-1042",time:"09:12",customer:"김민준",origin:"깜란 국제공항",dest:"무엉탄 럭셔리",vehicle:"7인승",fare:513000,pay:"현금",status:"ONBOARD",driver:"DRV-0427"},
+    {id:"KTX-2026-1041",time:"08:55",customer:"이서연",origin:"빈원더스",dest:"나트랑 비치",vehicle:"4인승",fare:320000,pay:"GLN",status:"ENROUTE",driver:"DRV-0431"},
+    {id:"KTX-2026-1040",time:"08:30",customer:"박도윤",origin:"나트랑 비치",dest:"혼쫑 곶",vehicle:"7인승",fare:122000,pay:"현금",status:"DONE",driver:"DRV-0431"},
+    {id:"KTX-2026-1039",time:"08:02",customer:"최지우",origin:"시내 중심가",dest:"깜란 국제공항",vehicle:"16인승",fare:760000,pay:"현금",status:"REQUESTED",driver:""},
+    {id:"KTX-2026-1038",time:"07:41",customer:"정하준",origin:"무엉탄 럭셔리",dest:"빈원더스",vehicle:"7인승",fare:405000,pay:"VNPAY",status:"CANCELLED",driver:""}
+  ],
+  complaints:[
+    {id:"CMP-014",booking:"KTX-2026-1038",customer:"정하준",type:"기사 지각",status:"OPEN",note:"픽업이 15분 지연됨"},
+    {id:"CMP-013",booking:"KTX-2026-1031",customer:"홍길동",type:"요금 문의",status:"RESOLVED",note:"정찰제 안내 후 해결"}
+  ],
+  revenueWeek:[
+    {d:"월",v:4.2},{d:"화",v:5.1},{d:"수",v:3.8},{d:"목",v:6.0},{d:"금",v:7.4},{d:"토",v:9.1},{d:"일",v:8.3}
+  ]
+};
+const BOOKING_STATUSES = ["REQUESTED","ASSIGNED","ENROUTE","ONBOARD","DONE","CANCELLED"];
+const STATUS_LABEL = { REQUESTED:"대기", ASSIGNED:"배차완료", ENROUTE:"기사 이동중", ONBOARD:"운행중", DONE:"완료", CANCELLED:"취소", OPEN:"처리 대기", RESOLVED:"처리 완료", online:"온라인", offline:"오프라인" };
+
+/* ---- 유틸 ---- */
+const $=id=>document.getElementById(id);
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const vnd=n=>"₫"+Number(n||0).toLocaleString("vi-VN");
+const krw=n=>"₩"+Math.round(Number(n||0)*AdminState.branding.vndToKrw).toLocaleString("ko-KR");
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove("show"),2200); }
+function saveState(msg){ /* TODO(handoff): 여기서 서버 API/Firebase로 저장. 현재는 메모리 반영. */ toast(msg||"저장되었습니다"); }
+function zoneName(id){ return AdminState.zones[id]||id; }
+
+/* ============================================================================
+ * 라우터 — 사이드바 네비게이션
+ * ========================================================================== */
+const RENDER = {}; // 각 pane 렌더 함수 등록
+const NAV_TITLE = { dashboard:"대시보드", dispatch:"배차 관리", drivers:"기사 관리", complaints:"컴플레인", fares:"요금 설정", vehicles:"차량 관리", places:"장소 관리", payments:"결제수단", branding:"브랜딩/디자인", i18n:"다국어 문구", config:"설정 내보내기/가져오기" };
+function go(pane){
+  document.querySelectorAll(".nav button").forEach(b=>b.classList.toggle("active",b.dataset.pane===pane));
+  document.querySelectorAll(".pane").forEach(p=>p.classList.remove("active"));
+  $("pane-"+pane).classList.add("active");
+  $("paneTitle").textContent=NAV_TITLE[pane]||pane;
+  if(RENDER[pane]) RENDER[pane]();
+  window.scrollTo(0,0);
+}
+
+/* ============================================================================
+ * 대시보드
+ * ========================================================================== */
+RENDER.dashboard=()=>{
+  const b=AdminState.bookings;
+  const todayCount=b.length;
+  const revenue=b.filter(x=>x.status!=="CANCELLED").reduce((s,x)=>s+x.fare,0);
+  const running=b.filter(x=>["ENROUTE","ONBOARD","ASSIGNED"].includes(x.status)).length;
+  const openCmp=AdminState.complaints.filter(x=>x.status==="OPEN").length;
+  const maxV=Math.max(...AdminState.revenueWeek.map(x=>x.v));
+  const bars=AdminState.revenueWeek.map(x=>`<div class="bar-col"><div class="bar-v">${x.v}M</div><div class="bar" style="height:${Math.round(x.v/maxV*100)}%"></div><div class="bar-x">${x.d}</div></div>`).join("");
+  const rows=b.slice(0,6).map(x=>`<tr><td class="mono">${esc(x.id)}</td><td>${esc(x.time)}</td><td>${esc(x.customer)}</td><td>${esc(x.origin)} → ${esc(x.dest)}</td><td class="num">${vnd(x.fare)}</td><td><span class="pill st-${x.status}">${STATUS_LABEL[x.status]}</span></td></tr>`).join("");
+  $("pane-dashboard").innerHTML=`
+    <h2>대시보드</h2><p class="desc">오늘의 운영 현황 요약입니다. (데모 데이터)</p>
+    <div class="kpis">
+      <div class="kpi"><div class="label">오늘 예약</div><div class="val">${todayCount}<span style="font-size:14px;color:var(--muted)"> 건</span></div><div class="sub">전일 대비 +3</div></div>
+      <div class="kpi"><div class="label">오늘 매출</div><div class="val lime">${vnd(revenue)}</div><div class="sub">≈ ${krw(revenue)}</div></div>
+      <div class="kpi"><div class="label">운행중</div><div class="val">${running}<span style="font-size:14px;color:var(--muted)"> 대</span></div><div class="sub">배차 대기 ${b.filter(x=>x.status==="REQUESTED").length}건</div></div>
+      <div class="kpi"><div class="label">대기 컴플레인</div><div class="val" style="color:${openCmp?'var(--danger)':'var(--text)'}">${openCmp}<span style="font-size:14px;color:var(--muted)"> 건</span></div><div class="sub">즉시 처리 필요</div></div>
+    </div>
+    <div class="card"><h3><span class="k"></span>주간 매출 추이 <span class="sp"></span><span style="font-size:11px;color:var(--muted)">단위: 백만 VND</span></h3><div class="bars">${bars}</div></div>
+    <div class="card"><h3><span class="k"></span>최근 예약</h3><div class="scroll-x"><table class="tbl"><thead><tr><th>예약번호</th><th>시간</th><th>고객</th><th>경로</th><th class="num">요금</th><th>상태</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+};
+
+/* ============================================================================
+ * 배차 관리 — 상태 변경 / 기사 배정
+ * ========================================================================== */
+RENDER.dispatch=()=>{
+  const drvOpts=id=>`<option value="">미배정</option>`+AdminState.drivers.map(d=>`<option value="${d.id}" ${d.id===id?"selected":""}>${esc(d.name)} (${esc(d.id)})</option>`).join("");
+  const stOpts=st=>BOOKING_STATUSES.map(s=>`<option value="${s}" ${s===st?"selected":""}>${STATUS_LABEL[s]}</option>`).join("");
+  const rows=AdminState.bookings.map((x,i)=>`<tr>
+      <td class="mono">${esc(x.id)}</td><td>${esc(x.time)}</td><td>${esc(x.customer)}</td>
+      <td>${esc(x.origin)} → ${esc(x.dest)}</td><td>${esc(x.vehicle)}</td><td class="num">${vnd(x.fare)}</td>
+      <td><select data-act="bk-status" data-i="${i}" style="width:130px">${stOpts(x.status)}</select></td>
+      <td><select data-act="bk-driver" data-i="${i}" style="width:180px">${drvOpts(x.driver)}</select></td>
+    </tr>`).join("");
+  $("pane-dispatch").innerHTML=`
+    <h2>배차 관리</h2><p class="desc">예약별 운행 상태와 기사 배정을 관리합니다. 상태/기사를 바꾸면 즉시 반영됩니다.</p>
+    <div class="card"><div class="scroll-x"><table class="tbl">
+      <thead><tr><th>예약번호</th><th>시간</th><th>고객</th><th>경로</th><th>차량</th><th class="num">요금</th><th>상태</th><th>배정 기사</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>
+      <div class="hint">상태 흐름: 대기 → 배차완료 → 기사 이동중 → 운행중 → 완료 / 취소</div>
+    </div>`;
+};
+
+/* ============================================================================
+ * 기사 관리 — CRUD
+ * ========================================================================== */
+RENDER.drivers=()=>{
+  const rows=AdminState.drivers.map((d,i)=>`<tr>
+      <td class="mono">${esc(d.id)}</td>
+      <td><input data-act="dv" data-f="name" data-i="${i}" value="${esc(d.name)}"></td>
+      <td><input data-act="dv" data-f="car" data-i="${i}" value="${esc(d.car)}"></td>
+      <td><input data-act="dv" data-f="plate" data-i="${i}" value="${esc(d.plate)}" style="width:110px"></td>
+      <td style="width:90px"><input data-act="dv" data-f="rating" data-i="${i}" value="${esc(d.rating)}" type="number" step="0.01"></td>
+      <td><select data-act="dv" data-f="status" data-i="${i}" style="width:110px"><option value="online" ${d.status==="online"?"selected":""}>온라인</option><option value="offline" ${d.status==="offline"?"selected":""}>오프라인</option></select></td>
+      <td><button class="btn danger sm" data-act="dv-del" data-i="${i}">삭제</button></td>
+    </tr>`).join("");
+  $("pane-drivers").innerHTML=`
+    <h2>기사 관리</h2><p class="desc">기사 정보를 추가·수정·삭제합니다.</p>
+    <div class="card"><h3><span class="k"></span>기사 목록<span class="sp"></span><button class="btn primary sm" data-act="dv-add">+ 기사 추가</button></h3>
+      <div class="scroll-x"><table class="tbl"><thead><tr><th>ID</th><th>이름</th><th>차량</th><th>번호판</th><th>평점</th><th>상태</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    </div>`;
+};
+
+/* ============================================================================
+ * 컴플레인
+ * ========================================================================== */
+RENDER.complaints=()=>{
+  const rows=AdminState.complaints.map((c,i)=>`<tr>
+      <td class="mono">${esc(c.id)}</td><td class="mono">${esc(c.booking)}</td><td>${esc(c.customer)}</td><td>${esc(c.type)}</td>
+      <td>${esc(c.note)}</td>
+      <td><span class="pill st-${c.status}">${STATUS_LABEL[c.status]}</span></td>
+      <td><button class="btn sm" data-act="cmp-toggle" data-i="${i}">${c.status==="OPEN"?"처리 완료로":"다시 열기"}</button></td>
+    </tr>`).join("");
+  $("pane-complaints").innerHTML=`
+    <h2>컴플레인 처리</h2><p class="desc">고객 컴플레인을 확인하고 처리 상태를 관리합니다.</p>
+    <div class="card"><div class="scroll-x"><table class="tbl"><thead><tr><th>번호</th><th>예약</th><th>고객</th><th>유형</th><th>내용</th><th>상태</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+};
+
+/* ============================================================================
+ * 요금 설정 — 정찰제 매트릭스 + 기본요금/가산
+ * ========================================================================== */
+RENDER.fares=()=>{
+  const f=AdminState.fares;
+  const head=`<tr><th>출발\\도착</th>${ZONE_IDS.map(z=>`<th>${esc(zoneName(z))}</th>`).join("")}</tr>`;
+  const body=ZONE_IDS.map(o=>`<tr><th>${esc(zoneName(o))}</th>${ZONE_IDS.map(d=>{
+    if(o===d) return `<td class="diag">–</td>`;
+    const v=(f.matrix[o]&&f.matrix[o][d])||0;
+    return `<td><input type="number" step="1000" data-act="fare" data-o="${o}" data-d="${d}" value="${v}"></td>`;
+  }).join("")}</tr>`).join("");
+  $("pane-fares").innerHTML=`
+    <h2>요금 설정 (정찰제)</h2><p class="desc">구역 간 고정 요금(VND)을 직접 수정합니다. 셀 값을 바꾸면 됩니다. 세로=출발, 가로=도착.</p>
+    <div class="card"><h3><span class="k"></span>구역별 요금 매트릭스 (VND)</h3>
+      <div class="scroll-x"><table class="matrix"><thead>${head}</thead><tbody>${body}</tbody></table></div>
+      <div class="hint">※ 대각선(같은 구역)은 아래 "같은 구역 기본요금"이 적용됩니다.</div>
+    </div>
+    <div class="card"><h3><span class="k"></span>기본/가산 요금</h3>
+      <div class="grid c3">
+        <div><label class="lbl">같은 구역 기본요금 (VND)</label><input type="number" step="1000" data-act="fare-base" value="${f.sameZone}"></div>
+        <div><label class="lbl">대형 캐리어 가산 (VND)</label><input type="number" step="1000" data-act="fare-surch" value="${f.luggageSurcharge}"></div>
+        <div><label class="lbl">가산 적용 캐리어 개수(이상)</label><input type="number" data-act="fare-thr" value="${f.luggageThreshold}"></div>
+      </div>
+    </div>`;
+};
+
+/* ============================================================================
+ * 차량 관리 — CRUD (이름/인승/배수/아이콘)
+ * ========================================================================== */
+RENDER.vehicles=()=>{
+  const rows=AdminState.vehicles.map((v,i)=>`<tr>
+      <td style="width:60px"><input data-act="vh" data-f="icon" data-i="${i}" value="${esc(v.icon)}" style="text-align:center"></td>
+      <td><input data-act="vh" data-f="name" data-i="${i}" value="${esc(v.name)}"></td>
+      <td style="width:90px"><input type="number" data-act="vh" data-f="seats" data-i="${i}" value="${v.seats}"></td>
+      <td style="width:100px"><input type="number" step="0.05" data-act="vh" data-f="mult" data-i="${i}" value="${v.mult}"></td>
+      <td><input data-act="vh" data-f="type" data-i="${i}" value="${esc(v.type)}" class="mono" style="font-size:11px"></td>
+      <td><button class="btn danger sm" data-act="vh-del" data-i="${i}">삭제</button></td>
+    </tr>`).join("");
+  $("pane-vehicles").innerHTML=`
+    <h2>차량 관리</h2><p class="desc">차량 등급(인승)을 추가·수정·삭제합니다. <b>배수</b>는 정찰제 기본요금에 곱해지는 값입니다(예: 1.35 = +35%).</p>
+    <div class="card"><h3><span class="k"></span>차량 등급<span class="sp"></span><button class="btn primary sm" data-act="vh-add">+ 차량 추가</button></h3>
+      <div class="scroll-x"><table class="tbl"><thead><tr><th>아이콘</th><th>이름</th><th>인승</th><th>요금 배수</th><th>코드(vehicleType)</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    </div>`;
+};
+
+/* ============================================================================
+ * 장소 관리 — CRUD (다국어 이름/구역/좌표)
+ * ========================================================================== */
+RENDER.places=()=>{
+  const zoneOpts=z=>ZONE_IDS.map(id=>`<option value="${id}" ${id===z?"selected":""}>${esc(zoneName(id))}</option>`).join("");
+  const rows=AdminState.places.map((p,i)=>`<tr>
+      <td><input data-act="pl" data-f="nameKo" data-i="${i}" value="${esc(p.nameKo)}"></td>
+      <td><input data-act="pl" data-f="nameEn" data-i="${i}" value="${esc(p.nameEn)}"></td>
+      <td><input data-act="pl" data-f="nameVi" data-i="${i}" value="${esc(p.nameVi)}"></td>
+      <td><select data-act="pl" data-f="zone" data-i="${i}" style="width:130px">${zoneOpts(p.zone)}</select></td>
+      <td style="width:100px"><input type="number" step="0.0001" data-act="pl" data-f="lat" data-i="${i}" value="${p.lat}"></td>
+      <td style="width:100px"><input type="number" step="0.0001" data-act="pl" data-f="lng" data-i="${i}" value="${p.lng}"></td>
+      <td><button class="btn danger sm" data-act="pl-del" data-i="${i}">삭제</button></td>
+    </tr>`).join("");
+  $("pane-places").innerHTML=`
+    <h2>장소 관리</h2><p class="desc">소비자앱의 장소 검색(자동완성) 목록을 관리합니다. 이름은 3개국어로 입력합니다.</p>
+    <div class="card"><h3><span class="k"></span>장소 목록<span class="sp"></span><button class="btn primary sm" data-act="pl-add">+ 장소 추가</button></h3>
+      <div class="scroll-x"><table class="tbl"><thead><tr><th>이름(KO)</th><th>이름(EN)</th><th>이름(VI)</th><th>구역</th><th>위도</th><th>경도</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    </div>`;
+};
+
+/* ============================================================================
+ * 결제수단 — on/off 토글
+ * ========================================================================== */
+RENDER.payments=()=>{
+  const rows=AdminState.payments.map((p,i)=>`<tr>
+      <td class="mono">${esc(p.key)}</td>
+      <td><input data-act="pay" data-f="label" data-i="${i}" value="${esc(p.label)}"></td>
+      <td style="width:120px"><select data-act="pay" data-f="enabled" data-i="${i}"><option value="1" ${p.enabled?"selected":""}>사용</option><option value="0" ${!p.enabled?"selected":""}>준비중</option></select></td>
+    </tr>`).join("");
+  $("pane-payments").innerHTML=`
+    <h2>결제수단</h2><p class="desc">소비자앱에 노출할 결제수단을 켜고 끕니다. "준비중"은 앱에서 비활성으로 표시됩니다.</p>
+    <div class="card"><div class="scroll-x"><table class="tbl"><thead><tr><th>코드</th><th>표시 이름</th><th>상태</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="hint">현장 결제(현금·GLN)는 즉시 사용, 온라인 PG(토스·이니시스·VNPAY·Momo)는 연동 후 "사용"으로 바꾸세요.</div>
+    </div>`;
+};
+
+/* ============================================================================
+ * 브랜딩/디자인 — 앱 이름, 포인트 색상, 기본 언어, 지도, 환율
+ * ========================================================================== */
+RENDER.branding=()=>{
+  const b=AdminState.branding;
+  $("pane-branding").innerHTML=`
+    <h2>브랜딩 / 디자인</h2><p class="desc">앱 이름·색상·기본 언어·지도 제공자를 코딩 없이 바꿉니다.</p>
+    <div class="card"><h3><span class="k"></span>기본 정보</h3>
+      <div class="grid c2">
+        <div><label class="lbl">앱 이름</label><input data-act="br" data-f="appName" value="${esc(b.appName)}"></div>
+        <div><label class="lbl">기본 언어</label><select data-act="br" data-f="defaultLang"><option value="ko" ${b.defaultLang==="ko"?"selected":""}>한국어</option><option value="en" ${b.defaultLang==="en"?"selected":""}>English</option><option value="vi" ${b.defaultLang==="vi"?"selected":""}>Tiếng Việt</option></select></div>
+      </div>
+    </div>
+    <div class="card"><h3><span class="k"></span>색상 (브랜드 포인트)</h3>
+      <div class="grid c2">
+        <div><label class="lbl">메인 라임/포인트</label><div class="color-row"><input type="color" data-act="br" data-f="pointColor" value="${b.pointColor}"><span class="mono">${esc(b.pointColor)}</span></div></div>
+        <div><label class="lbl">에메랄드/보조</label><div class="color-row"><input type="color" data-act="br" data-f="accent" value="${b.accent}"><span class="mono">${esc(b.accent)}</span></div></div>
+      </div>
+      <div class="hint">색상을 바꾸면 이 관리자 화면의 포인트 색도 즉시 미리보기됩니다.</div>
+    </div>
+    <div class="card"><h3><span class="k"></span>지도 / 환율</h3>
+      <div class="grid c2">
+        <div><label class="lbl">지도 제공자</label><select data-act="br" data-f="mapProvider"><option value="osm" ${b.mapProvider==="osm"?"selected":""}>OpenStreetMap (무료·키 불필요)</option><option value="google" ${b.mapProvider==="google"?"selected":""}>Google Maps (API 키 필요)</option><option value="mapbox" ${b.mapProvider==="mapbox"?"selected":""}>Mapbox (토큰 필요)</option></select></div>
+        <div><label class="lbl">환율 (1 VND → KRW)</label><input type="number" step="0.001" data-act="br" data-f="vndToKrw" value="${b.vndToKrw}"></div>
+      </div>
+    </div>`;
+};
+
+/* ============================================================================
+ * 다국어 문구 — 언어별 주요 라벨 편집
+ * ========================================================================== */
+let I18N_LANG="ko";
+RENDER.i18n=()=>{
+  const dict=AdminState.i18n[I18N_LANG];
+  const rows=Object.keys(dict).map(k=>`<tr><td class="mono">${esc(k)}</td><td><input data-act="i18n" data-k="${esc(k)}" value="${esc(dict[k])}"></td></tr>`).join("");
+  $("pane-i18n").innerHTML=`
+    <h2>다국어 문구</h2><p class="desc">언어별 주요 문구를 편집합니다. (프로토타입은 대표 키만 노출 — 실제 앱의 전체 사전으로 확장 가능)</p>
+    <div class="lang-tabs">
+      <button data-lang="ko" class="${I18N_LANG==="ko"?"active":""}">한국어</button>
+      <button data-lang="en" class="${I18N_LANG==="en"?"active":""}">English</button>
+      <button data-lang="vi" class="${I18N_LANG==="vi"?"active":""}">Tiếng Việt</button>
+    </div>
+    <div class="card"><div class="scroll-x"><table class="tbl"><thead><tr><th style="width:200px">키</th><th>문구</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  $("pane-i18n").querySelectorAll(".lang-tabs button").forEach(btn=>btn.addEventListener("click",()=>{ I18N_LANG=btn.dataset.lang; RENDER.i18n(); }));
+};
+
+/* ============================================================================
+ * 설정 내보내기/가져오기
+ * ========================================================================== */
+RENDER.config=()=>{
+  $("pane-config").innerHTML=`
+    <h2>설정 내보내기 / 가져오기</h2><p class="desc">현재 모든 설정을 JSON으로 저장하거나 불러옵니다. 인계받는 개발자는 이 JSON을 백엔드/앱에 연결하면 됩니다.</p>
+    <div class="card"><h3><span class="k"></span>설정 JSON<span class="sp"></span>
+      <button class="btn sm" data-act="cfg-copy">📋 복사</button>
+      <button class="btn sm" data-act="cfg-download">⬇ 파일로 저장</button>
+      <button class="btn sm" data-act="cfg-import">⬆ 파일에서 불러오기</button>
+    </h3>
+      <textarea class="json" id="cfgArea" spellcheck="false">${esc(JSON.stringify(AdminState,null,2))}</textarea>
+      <div class="hint">"파일에서 불러오기"로 JSON을 넣으면 모든 화면이 그 값으로 갱신됩니다.</div>
+    </div>`;
+};
+
+/* ============================================================================
+ * 이벤트 위임 — 모든 편집/버튼
+ * ========================================================================== */
+document.addEventListener("input",e=>{
+  const t=e.target, act=t.dataset.act; if(!act) return;
+  const i=+t.dataset.i;
+  if(act==="fare"){ const o=t.dataset.o,d=t.dataset.d; (AdminState.fares.matrix[o]=AdminState.fares.matrix[o]||{})[d]=+t.value; }
+  else if(act==="fare-base") AdminState.fares.sameZone=+t.value;
+  else if(act==="fare-surch") AdminState.fares.luggageSurcharge=+t.value;
+  else if(act==="fare-thr") AdminState.fares.luggageThreshold=+t.value;
+  else if(act==="vh"){ const f=t.dataset.f; AdminState.vehicles[i][f]=(f==="seats"||f==="mult")?+t.value:t.value; }
+  else if(act==="pl"){ const f=t.dataset.f; AdminState.places[i][f]=(f==="lat"||f==="lng")?+t.value:t.value; }
+  else if(act==="pay"){ const f=t.dataset.f; if(f==="enabled") AdminState.payments[i].enabled=t.value==="1"; else AdminState.payments[i][f]=t.value; }
+  else if(act==="dv"){ const f=t.dataset.f; AdminState.drivers[i][f]=(f==="rating")?+t.value:t.value; }
+  else if(act==="br"){ const f=t.dataset.f; AdminState.branding[f]=(f==="vndToKrw")?+t.value:t.value; if(f==="pointColor"||f==="accent"){ applyBranding(); if(t.nextElementSibling) t.nextElementSibling.textContent=t.value; } }
+  else if(act==="i18n"){ AdminState.i18n[I18N_LANG][t.dataset.k]=t.value; }
+  else if(act==="bk-status"){ AdminState.bookings[i].status=t.value; }
+  else if(act==="bk-driver"){ AdminState.bookings[i].driver=t.value; }
+});
+document.addEventListener("click",e=>{
+  const b=e.target.closest("[data-act]"); if(!b) return; const act=b.dataset.act; const i=+b.dataset.i;
+  if(act==="vh-add"){ AdminState.vehicles.push({id:"veh"+Date.now(),name:"새 차량",seats:4,mult:1.0,icon:"🚘",type:"NEW_TYPE"}); RENDER.vehicles(); saveState("차량이 추가되었습니다"); }
+  else if(act==="vh-del"){ AdminState.vehicles.splice(i,1); RENDER.vehicles(); saveState("차량이 삭제되었습니다"); }
+  else if(act==="pl-add"){ AdminState.places.push({id:"place"+Date.now(),nameKo:"새 장소",nameEn:"New place",nameVi:"Địa điểm mới",zone:"city",lat:12.2388,lng:109.1965}); RENDER.places(); saveState("장소가 추가되었습니다"); }
+  else if(act==="pl-del"){ AdminState.places.splice(i,1); RENDER.places(); saveState("장소가 삭제되었습니다"); }
+  else if(act==="dv-add"){ AdminState.drivers.push({id:"DRV-"+Math.floor(1000+AdminState.drivers.length),name:"새 기사",car:"차량",plate:"79A-000.00",rating:5.0,status:"offline"}); RENDER.drivers(); saveState("기사가 추가되었습니다"); }
+  else if(act==="dv-del"){ AdminState.drivers.splice(i,1); RENDER.drivers(); saveState("기사가 삭제되었습니다"); }
+  else if(act==="cmp-toggle"){ const c=AdminState.complaints[i]; c.status=c.status==="OPEN"?"RESOLVED":"OPEN"; RENDER.complaints(); saveState("컴플레인 상태가 변경되었습니다"); }
+  else if(act==="cfg-copy"){ const ta=$("cfgArea"); ta.select(); document.execCommand&&document.execCommand("copy"); toast("클립보드에 복사되었습니다"); }
+  else if(act==="cfg-download"){ downloadConfig(); }
+  else if(act==="cfg-import"){ $("importFile").click(); }
+});
+
+/* ---- 상단 버튼 ---- */
+$("btnSaveAll").addEventListener("click",()=>saveState("모든 변경사항이 저장되었습니다 (메모리)"));
+$("btnExportTop").addEventListener("click",()=>downloadConfig());
+$("btnPreview").addEventListener("click",()=>{ window.open("./index.html","_blank"); });
+$("nav").addEventListener("click",e=>{ const b=e.target.closest("button[data-pane]"); if(b) go(b.dataset.pane); });
+
+/* ---- 설정 파일 저장/불러오기 ---- */
+function downloadConfig(){
+  const blob=new Blob([JSON.stringify(AdminState,null,2)],{type:"application/json"});
+  const url=URL.createObjectURL(blob); const a=document.createElement("a");
+  a.href=url; a.download="taxi-k-config.json"; a.click(); URL.revokeObjectURL(url);
+  toast("설정 파일을 저장했습니다");
+}
+$("importFile").addEventListener("change",e=>{
+  const file=e.target.files[0]; if(!file) return;
+  const reader=new FileReader();
+  reader.onload=()=>{ try{ const data=JSON.parse(reader.result); Object.assign(AdminState,data); go("config"); toast("설정을 불러왔습니다"); }catch(err){ toast("JSON 형식 오류: 불러오지 못했습니다"); } };
+  reader.readAsText(file); e.target.value="";
+});
+
+/* ---- 브랜딩 색상 실시간 반영 (관리자 화면 자체) ---- */
+function applyBranding(){ const r=document.documentElement.style; r.setProperty("--lime",AdminState.branding.pointColor); r.setProperty("--emerald",AdminState.branding.accent); }
+
+/* ---- 시작 ---- */
+applyBranding();
+RENDER.dashboard();
+</script>
+</body>
+</html>
