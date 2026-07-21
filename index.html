@@ -871,7 +871,7 @@ const App = {
       payload.status="ASSIGNED";
       payload.dispatch={ assignedDriverId:driver.id, driverName:driver.nameKo, vehicle:driver.car, plate:driver.plate, rating:driver.rating, vehicleType:this.selectedVehicle.type, seats:this.selectedVehicle.seats, etaMin:6 };
       const ack=await BookingService.submit(payload);
-      recordSale(payload);                 // 매출 원장에 기록 → 관리자 매출 메뉴 반영
+      recordBooking(payload);              // 관리자 배차 관리에 "예약 접수"로 등록(매출은 완료 시 확정)
       this.logPayload(payload,ack); this.toast(I18nService.t("toast_booked"));
     }catch(err){ this.logError(err); }
     finally{ this.els.bookBtn.disabled=false; }
@@ -895,21 +895,23 @@ const ConfigStore = {
   load(){ try{ const s=localStorage.getItem(this.KEY); return s?JSON.parse(s):null; }catch(e){ return null; } },
   save(cfg){ try{ localStorage.setItem(this.KEY, JSON.stringify(cfg)); return true; }catch(e){ return false; } }
 };
-/* 예약 완료 시 매출 원장에 기록 → 관리자 "매출" 메뉴에 반영 (공유 설정)
-   TODO(handoff): 실서비스는 서버 결제완료 이벤트에서 매출을 적재. */
-function recordSale(payload){
+/* 예약 완료 시 "예약 접수(REQUESTED)"로 관리자 배차 관리에 등록 (공유 설정).
+   매출은 예약 시점이 아니라, 관리자에서 운행 완료(DONE) 처리될 때 잡힌다.
+   TODO(handoff): 실서비스는 서버가 예약 생성 → 배차 → 완료 이벤트로 매출을 확정. */
+function recordBooking(payload){
   try{
     const cfg=ConfigStore.load()||{};
-    cfg.sales=Array.isArray(cfg.sales)?cfg.sales:[];
-    const d=new Date();
-    const date=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+    cfg.bookings=Array.isArray(cfg.bookings)?cfg.bookings:[];
+    const t=new Date();
+    const time=String(t.getHours()).padStart(2,"0")+":"+String(t.getMinutes()).padStart(2,"0");
+    const date=t.getFullYear()+"-"+String(t.getMonth()+1).padStart(2,"0")+"-"+String(t.getDate()).padStart(2,"0");
     const prov=PaymentService._providers.get(payload.payment.method);
-    cfg.sales.push({
-      date,
-      bookingId:payload.bookingId,
+    cfg.bookings.unshift({
+      id:payload.bookingId, date, time, customer:"앱 예약 고객",
+      origin:payload.trip.origin.name, dest:payload.trip.destination.name,
       vehicle:(payload.trip.vehicle&&payload.trip.vehicle.name)||"",
-      pay:(prov&&prov._label)||payload.payment.method,
-      amount:payload.fare.amountVnd
+      fare:payload.fare.amountVnd, pay:(prov&&prov._label)||payload.payment.method,
+      status:"REQUESTED", driver:""
     });
     ConfigStore.save(cfg);
   }catch(e){ /* 저장 실패 시 무시(데모 지속) */ }

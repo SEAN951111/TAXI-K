@@ -37,6 +37,8 @@ a{color:var(--emerald);}
 button{font-family:inherit;cursor:pointer;}
 input,select,textarea{font-family:inherit;background:var(--surface-2);border:1px solid var(--line);color:var(--text);border-radius:var(--radius-sm);padding:9px 11px;font-size:13px;outline:none;width:100%;}
 input:focus,select:focus,textarea:focus{border-color:var(--emerald);box-shadow:0 0 0 3px rgba(18,198,122,.15);}
+input[type=date]{color-scheme:dark;cursor:pointer;}                 /* 다크 테마 달력 + 필드 전체 클릭 */
+input[type=date]::-webkit-calendar-picker-indicator{filter:invert(1);opacity:.8;cursor:pointer;}
 .btn{border:1px solid var(--line);background:var(--surface-2);color:var(--text);border-radius:var(--radius-sm);padding:9px 14px;font-weight:700;font-size:13px;}
 .btn:hover{border-color:var(--emerald);}
 .btn.primary{background:var(--grad);color:#06210f;border:0;}
@@ -291,6 +293,16 @@ const ConfigStore = {
 };
 let _autosaveT; function scheduleAutosave(){ clearTimeout(_autosaveT); _autosaveT=setTimeout(()=>ConfigStore.save(AdminState),300); }
 function saveState(msg){ const ok=ConfigStore.save(AdminState); toast(msg||(ok?"저장되었습니다 · 소비자앱에 반영됩니다":"저장되었습니다(메모리)")); }
+/* 매출 인식: 운행 완료(DONE)일 때만 매출 원장에 반영, 그 외(취소 등)는 제외 */
+function saleDate(){ const d=new Date(); return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function reconcileSale(bk){
+  const idx=AdminState.sales.findIndex(s=>s.bookingId===bk.id);
+  if(bk.status==="DONE"){
+    if(idx<0) AdminState.sales.push({ date:bk.date||saleDate(), bookingId:bk.id, vehicle:bk.vehicle||"", pay:bk.pay||"", amount:bk.fare||0 });
+  }else{
+    if(idx>=0) AdminState.sales.splice(idx,1);   // 취소/되돌림 시 매출에서 제거
+  }
+}
 function zoneName(id){ return AdminState.zones[id]||id; }
 
 /* ============================================================================
@@ -405,6 +417,8 @@ RENDER.revenue=()=>{
   const bind=(id,ev,fn)=>{ const el=$(id); if(el) el.addEventListener(ev,fn); };
   bind("rvFrom","change",e=>{ RV.from=e.target.value; RENDER.revenue(); });
   bind("rvTo","change",e=>{ RV.to=e.target.value; RENDER.revenue(); });
+  // 필드 아무 곳이나 누르면 달력이 바로 뜨도록
+  ["rvFrom","rvTo"].forEach(id=>{ const el=$(id); if(el) el.addEventListener("click",()=>{ try{ el.showPicker&&el.showPicker(); }catch(_){} }); });
   bind("rvGroup","change",e=>{ RV.group=e.target.value; RENDER.revenue(); });
   bind("rvExport","click",exportSalesExcel);
   $("pane-revenue").querySelectorAll("[data-rv]").forEach(btn=>btn.addEventListener("click",()=>{
@@ -647,7 +661,7 @@ document.addEventListener("input",e=>{
   else if(act==="dv"){ const f=t.dataset.f; AdminState.drivers[i][f]=(f==="rating")?+t.value:t.value; }
   else if(act==="br"){ const f=t.dataset.f; AdminState.branding[f]=(f==="vndToKrw")?+t.value:t.value; if(f==="pointColor"||f==="accent"){ applyBranding(); if(t.nextElementSibling) t.nextElementSibling.textContent=t.value; } }
   else if(act==="i18n"){ AdminState.i18n[I18N_LANG][t.dataset.k]=t.value; }
-  else if(act==="bk-status"){ AdminState.bookings[i].status=t.value; }
+  else if(act==="bk-status"){ const bk=AdminState.bookings[i]; bk.status=t.value; reconcileSale(bk); }
   else if(act==="bk-driver"){ AdminState.bookings[i].driver=t.value; }
   scheduleAutosave();   // 입력 변경 시 자동 저장 → 소비자앱에 반영
 });
@@ -706,11 +720,13 @@ $("importFile").addEventListener("change",e=>{
 /* ---- 브랜딩 색상 실시간 반영 (관리자 화면 자체) ---- */
 function applyBranding(){ const r=document.documentElement.style; r.setProperty("--lime",AdminState.branding.pointColor); r.setProperty("--emerald",AdminState.branding.accent); }
 
-/* 소비자앱에서 예약 완료로 매출이 추가되면(다른 탭 storage 변경) 자동 반영 */
+/* 소비자앱에서 예약이 들어오거나(배차 관리) 매출이 바뀌면(다른 탭 storage 변경) 자동 반영 */
 window.addEventListener("storage",e=>{
   if(e.key!==ConfigStore.KEY) return;
-  const s=ConfigStore.load();
-  if(s&&Array.isArray(s.sales)){ AdminState.sales=s.sales; if(CURRENT_PANE==="revenue") RENDER.revenue(); if(CURRENT_PANE==="dashboard") RENDER.dashboard(); }
+  const s=ConfigStore.load(); if(!s) return;
+  if(Array.isArray(s.bookings)) AdminState.bookings=s.bookings;
+  if(Array.isArray(s.sales)) AdminState.sales=s.sales;
+  if(RENDER[CURRENT_PANE]) RENDER[CURRENT_PANE]();   // 현재 화면 갱신
 });
 
 /* ---- 시작 ---- */
