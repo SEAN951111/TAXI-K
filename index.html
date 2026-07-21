@@ -439,15 +439,40 @@ const FareService = {
     nhatrang_s:{airport:38,city:9,vinwonders:29,beach:34,honchong:11,nhatrang_s:0},
     honchong:{airport:37,city:5,vinwonders:30,beach:33,nhatrang_s:11,honchong:0}
   },
-  // 아래 3개 값은 관리자(admin.html) 설정으로 덮어쓸 수 있음(applyConfig)
   sameZone:60000, luggageSurcharge:40000, luggageThreshold:4,
-  quote(origin,dest,{luggage=0, vehicleMult=1}={}){
+  /* 실제 요금표(정찰제) — 관리자(admin.html)와 동일 기본값. applyConfig로 덮어씀. */
+  rateCard:{
+    areaSurchargeLabel:"KN, NAVY, MIA", areaSurcharge:50000, dayStart:"06:00", dayEnd:"20:00",
+    pickup:[
+      { id:"camranh",  name:"공항 - 깜란",       day:{s4:100000,s7:130000,s16:300000}, night:{s4:150000,s7:180000,s16:350000} },
+      { id:"nhatrang", name:"공항 - 나트랑 시내", day:{s4:225000,s7:250000,s16:450000}, night:{s4:275000,s7:300000,s16:500000} },
+      { id:"honchong", name:"공항 - 혼총",       day:{s4:325000,s7:370000,s16:550000}, night:{s4:375000,s7:420000,s16:600000} }
+    ]
+  },
+  /* 소비자앱 구역 → 요금표 픽업 구간 매핑 (공항 출발/도착 시) */
+  ZONE_TO_ROUTE:{ city:"nhatrang", honchong:"honchong", nhatrang_s:"camranh" },
+  _seatKey(seats){ return seats<=4?"s4":(seats<=7?"s7":"s16"); },
+  _isDay(){ const rc=this.rateCard||{}; const d=new Date(); const cur=d.getHours()*60+d.getMinutes();
+    const P=s=>{ const p=(s||"0:0").split(":").map(Number); return (p[0]||0)*60+(p[1]||0); };
+    const st=P(rc.dayStart||"06:00"), en=P(rc.dayEnd||"20:00"); return cur>=st && cur<en; },
+  quote(origin,dest,{seats=7, luggage=0}={}){
     if(!origin||!dest) return null;
+    const rc=this.rateCard, seatKey=this._seatKey(seats);
+    // ① 공항 픽업 정찰제(요금표): 출발 또는 도착이 공항일 때
+    if(rc && Array.isArray(rc.pickup) && (origin==="airport"||dest==="airport")){
+      const other = origin==="airport" ? dest : origin;
+      const route = rc.pickup.find(r=>r.id===this.ZONE_TO_ROUTE[other]);
+      if(route){
+        const period=this._isDay()?"day":"night";
+        const vnd=(route[period]&&route[period][seatKey])||0;
+        return { vnd, krw:Math.round(vnd*CONFIG.vndToKrw), distanceKm:(this.DIST[origin]?.[dest] ?? 0), period, fixed:true, routeName:route.name };
+      }
+    }
+    // ② 요금표에 없는 구간(데모 추정) — 배수 없이 기본 매트릭스
     let base = origin===dest ? this.sameZone : (this.MATRIX[origin]?.[dest] ?? 0);
-    base = Math.round(base * vehicleMult / 1000) * 1000;
     const surcharge = luggage>=this.luggageThreshold ? this.luggageSurcharge : 0;
     const vnd = base + surcharge;
-    return { vnd, krw:Math.round(vnd*CONFIG.vndToKrw), distanceKm:(this.DIST[origin]?.[dest] ?? 0), surcharge };
+    return { vnd, krw:Math.round(vnd*CONFIG.vndToKrw), distanceKm:(this.DIST[origin]?.[dest] ?? 0), surcharge, fixed:false };
   }
 };
 
@@ -628,7 +653,7 @@ const BookingService = {
   _seq:1000, _id(){ return "KTX-"+new Date().getFullYear()+"-"+(++this._seq); },
   build(form){
     const v=form.vehicle||VehicleService.default();
-    const fare=FareService.quote(form.origin.zoneId, form.dest.zoneId, {luggage:form.luggage, vehicleMult:v.mult});
+    const fare=FareService.quote(form.origin.zoneId, form.dest.zoneId, {luggage:form.luggage, seats:v.seats});
     const place=(p)=>({ placeId:p.id, name:p.name[I18nService.lang]||p.name.ko, zoneId:p.zoneId, zoneName:I18nService.zoneName(p.zoneId),
                         lat:p.coords?p.coords[0]:null, lng:p.coords?p.coords[1]:null, typedAddress:!!p.typed, source:p.remote?"osm":(p.id&&p.id.startsWith("__")?p.id.slice(2):"poi") });
     return {
@@ -683,7 +708,7 @@ const App = {
     this.els.vehGrid.innerHTML = VehicleService.list().map(v=>{
       const active=this.selectedVehicle?.id===v.id?" active":"";
       let price;
-      if(hasRoute){ const q=FareService.quote(this.selectedOrigin.zoneId,this.selectedDest.zoneId,{luggage:+this.els.luggage.value, vehicleMult:v.mult}); price=`<div class="vprice">₫${(q?.vnd??0).toLocaleString(CONFIG.currencyLocale)}</div>`; }
+      if(hasRoute){ const q=FareService.quote(this.selectedOrigin.zoneId,this.selectedDest.zoneId,{luggage:+this.els.luggage.value, seats:v.seats}); price=`<div class="vprice">₫${(q?.vnd??0).toLocaleString(CONFIG.currencyLocale)}</div>`; }
       else { price=`<div class="vprice tag">${I18nService.t(v.tagKey)}</div>`; }
       return `<div class="veh-opt${active}" data-veh="${v.id}"><span class="vic">${v.icon}</span><div class="vname">${this.escape(v.name[I18nService.lang]||v.name.ko)}</div><div class="vseat">${v.seats}${I18nService.t("seats_unit")}</div>${price}</div>`;
     }).join("");
@@ -844,7 +869,7 @@ const App = {
   recalcFare(){
     this.renderVehicles();
     if(!this.selectedOrigin||!this.selectedDest){ this.els.fareVnd.textContent="₫0"; this.els.fareKrw.textContent="≈ ₩0"; this.els.distTxt.textContent="-- km"; return; }
-    const q=FareService.quote(this.selectedOrigin.zoneId,this.selectedDest.zoneId,{luggage:+this.els.luggage.value, vehicleMult:this.selectedVehicle?.mult||1});
+    const q=FareService.quote(this.selectedOrigin.zoneId,this.selectedDest.zoneId,{luggage:+this.els.luggage.value, seats:this.selectedVehicle?.seats||7});
     this.els.fareVnd.textContent="₫"+(q?.vnd??0).toLocaleString(CONFIG.currencyLocale);
     this.els.fareKrw.textContent="≈ ₩"+(q?.krw??0).toLocaleString("ko-KR");
     this.els.distTxt.textContent=(this._routeKm!=null?this._routeKm:(q?.distanceKm??0))+" km";
@@ -929,10 +954,11 @@ function applyConfig(cfg){
     if(cfg.zones) for(const z in cfg.zones){ if(DICT.ko.zones[z]!==undefined) DICT.ko.zones[z]=cfg.zones[z]; }
     // 요금(정찰제)
     if(cfg.fares){
-      if(cfg.fares.matrix) FareService.MATRIX=JSON.parse(JSON.stringify(cfg.fares.matrix));
-      if(cfg.fares.sameZone!=null) FareService.sameZone=+cfg.fares.sameZone;
-      if(cfg.fares.luggageSurcharge!=null) FareService.luggageSurcharge=+cfg.fares.luggageSurcharge;
-      if(cfg.fares.luggageThreshold!=null) FareService.luggageThreshold=+cfg.fares.luggageThreshold;
+      if(Array.isArray(cfg.fares.pickup)){ FareService.rateCard=cfg.fares; }          // 신규 요금표(픽업/대절)
+      else if(cfg.fares.matrix){                                                       // 구버전(매트릭스) 호환
+        FareService.MATRIX=JSON.parse(JSON.stringify(cfg.fares.matrix));
+        if(cfg.fares.sameZone!=null) FareService.sameZone=+cfg.fares.sameZone;
+      }
     }
     // 차량 등급
     if(Array.isArray(cfg.vehicles)&&cfg.vehicles.length){
