@@ -213,21 +213,27 @@ textarea.json{min-height:320px;font-family:ui-monospace,Menlo,Consolas,monospace
  *   소비자앱과 동일한 기본값으로 시드. 여기서 수정 → 내보내기(JSON) → 앱에 연결.
  * ========================================================================== */
 const ZONE_IDS = ["airport","city","vinwonders","beach","nhatrang_s","honchong"];
+/* 실제 요금표(PICK & RENT A CAR) — 단위 VND. 주간 06:00–20:00 / 야간 20:00–06:00.
+   KN·NAVY·MIA 지역은 픽업에 +50,000 할증. */
+function makeFares(){ return {
+  areaSurchargeLabel:"KN, NAVY, MIA", areaSurcharge:50000, dayStart:"06:00", dayEnd:"20:00",
+  pickup:[
+    { id:"camranh",  name:"공항 - 깜란 (SBCR - Cam Ranh)",     day:{s4:100000,s7:130000,s16:300000}, night:{s4:150000,s7:180000,s16:350000} },
+    { id:"nhatrang", name:"공항 - 나트랑 시내 (SBCR - Nha Trang)", day:{s4:225000,s7:250000,s16:450000}, night:{s4:275000,s7:300000,s16:500000} },
+    { id:"honchong", name:"공항 - 혼총 (SBCR - Hon Chong)",     day:{s4:325000,s7:370000,s16:550000}, night:{s4:375000,s7:420000,s16:600000} }
+  ],
+  rental:[
+    { id:"nt4h",  name:"RENT A CAR · 나트랑 4시간 (NHA TRANG 4H)",  s4:450000,  s7:550000,  s16:750000 },
+    { id:"nt8h",  name:"RENT A CAR · 나트랑 8시간 (NHA TRANG 8H)",  s4:900000,  s7:1100000, s16:1400000 },
+    { id:"pr10h", name:"RENT A CAR · 판랑 10시간 (PHAN RANG 10H)",  s4:1500000, s7:1600000, s16:2400000 },
+    { id:"dl12h", name:"RENT A CAR · 달랏 12시간 (DALAT 12H)",     s4:1800000, s7:2000000, s16:3000000 }
+  ]
+}; }
 const AdminState = {
   branding:{ appName:"택시케이", pointColor:"#b6ff3a", accent:"#12c67a", defaultLang:"ko", mapProvider:"osm", vndToKrw:0.056 },
   brandingDefaults:{ pointColor:"#b6ff3a", accent:"#12c67a" }, // '고정' 버튼으로 저장되는 기본 색상 / '초기화'가 여기로 되돌림
   zones:{ airport:"깜란 국제공항", city:"시내 중심가", vinwonders:"빈원더스/빈펄", beach:"북부 해변", nhatrang_s:"나트랑 남부", honchong:"혼쫑 곶" },
-  fares:{
-    sameZone:60000, luggageSurcharge:40000, luggageThreshold:4,
-    matrix:{
-      airport:{city:380000,vinwonders:250000,beach:180000,nhatrang_s:420000,honchong:410000},
-      city:{airport:380000,vinwonders:300000,beach:350000,nhatrang_s:120000,honchong:90000},
-      vinwonders:{airport:250000,city:300000,beach:320000,nhatrang_s:330000,honchong:340000},
-      beach:{airport:180000,city:350000,vinwonders:320000,nhatrang_s:400000,honchong:390000},
-      nhatrang_s:{airport:420000,city:120000,vinwonders:330000,beach:400000,honchong:150000},
-      honchong:{airport:410000,city:90000,vinwonders:340000,beach:390000,nhatrang_s:150000}
-    }
-  },
+  fares: makeFares(),
   vehicles:[
     {id:"sedan4",name:"4인승 세단",seats:4,mult:1.0,icon:"🚗",type:"VINFAST_SEDAN_4"},
     {id:"limo7",name:"7인승 리모 그린",seats:7,mult:1.35,icon:"✨",type:"VINFAST_LIMO_GREEN_7"},
@@ -497,24 +503,46 @@ function updateCmpSelCount(){ const el=$("cmpSelCount"); if(!el) return; const n
  * ========================================================================== */
 RENDER.fares=()=>{
   const f=AdminState.fares;
-  const head=`<tr><th>출발\\도착</th>${ZONE_IDS.map(z=>`<th>${esc(zoneName(z))}</th>`).join("")}</tr>`;
-  const body=ZONE_IDS.map(o=>`<tr><th>${esc(zoneName(o))}</th>${ZONE_IDS.map(d=>{
-    if(o===d) return `<td class="diag">–</td>`;
-    const v=(f.matrix[o]&&f.matrix[o][d])||0;
-    return `<td><input type="number" step="1000" data-act="fare" data-o="${o}" data-d="${d}" value="${v}"></td>`;
-  }).join("")}</tr>`).join("");
+  const NW='style="width:104px;text-align:right"';
+  const seatHead=`<th class="num">4인승</th><th class="num">7인승</th><th class="num">16인승</th>`;
+  const pickRows=f.pickup.map((r,i)=>`
+    <tr>
+      <td rowspan="2"><input data-act="fp-name" data-i="${i}" value="${esc(r.name)}"></td>
+      <td>주간<br><span style="font-size:10px;color:var(--muted)">${esc(f.dayStart)}–${esc(f.dayEnd)}</span></td>
+      <td class="num"><input type="number" step="1000" ${NW} data-act="fp" data-i="${i}" data-p="day" data-s="s4" value="${r.day.s4}"></td>
+      <td class="num"><input type="number" step="1000" ${NW} data-act="fp" data-i="${i}" data-p="day" data-s="s7" value="${r.day.s7}"></td>
+      <td class="num"><input type="number" step="1000" ${NW} data-act="fp" data-i="${i}" data-p="day" data-s="s16" value="${r.day.s16}"></td>
+      <td rowspan="2"><button class="btn danger sm" data-act="fp-del" data-i="${i}">삭제</button></td>
+    </tr>
+    <tr>
+      <td>야간<br><span style="font-size:10px;color:var(--muted)">${esc(f.dayEnd)}–${esc(f.dayStart)}</span></td>
+      <td class="num"><input type="number" step="1000" ${NW} data-act="fp" data-i="${i}" data-p="night" data-s="s4" value="${r.night.s4}"></td>
+      <td class="num"><input type="number" step="1000" ${NW} data-act="fp" data-i="${i}" data-p="night" data-s="s7" value="${r.night.s7}"></td>
+      <td class="num"><input type="number" step="1000" ${NW} data-act="fp" data-i="${i}" data-p="night" data-s="s16" value="${r.night.s16}"></td>
+    </tr>`).join("");
+  const rentRows=f.rental.map((r,i)=>`<tr>
+      <td><input data-act="fr-name" data-i="${i}" value="${esc(r.name)}"></td>
+      <td class="num"><input type="number" step="1000" ${NW} data-act="fr" data-i="${i}" data-s="s4" value="${r.s4}"></td>
+      <td class="num"><input type="number" step="1000" ${NW} data-act="fr" data-i="${i}" data-s="s7" value="${r.s7}"></td>
+      <td class="num"><input type="number" step="1000" ${NW} data-act="fr" data-i="${i}" data-s="s16" value="${r.s16}"></td>
+      <td><button class="btn danger sm" data-act="fr-del" data-i="${i}">삭제</button></td>
+    </tr>`).join("");
   $("pane-fares").innerHTML=`
-    <h2>요금 설정 (정찰제)</h2><p class="desc">구역 간 고정 요금(VND)을 직접 수정합니다. 셀 값을 바꾸면 됩니다. 세로=출발, 가로=도착.</p>
-    <div class="card"><h3><span class="k"></span>구역별 요금 매트릭스 (VND)</h3>
-      <div class="scroll-x"><table class="matrix"><thead>${head}</thead><tbody>${body}</tbody></table></div>
-      <div class="hint">※ 대각선(같은 구역)은 아래 "같은 구역 기본요금"이 적용됩니다.</div>
-    </div>
-    <div class="card"><h3><span class="k"></span>기본/가산 요금</h3>
-      <div class="grid c3">
-        <div><label class="lbl">같은 구역 기본요금 (VND)</label><input type="number" step="1000" data-act="fare-base" value="${f.sameZone}"></div>
-        <div><label class="lbl">대형 캐리어 가산 (VND)</label><input type="number" step="1000" data-act="fare-surch" value="${f.luggageSurcharge}"></div>
-        <div><label class="lbl">가산 적용 캐리어 개수(이상)</label><input type="number" data-act="fare-thr" value="${f.luggageThreshold}"></div>
+    <h2>요금 설정</h2><p class="desc">실제 요금표(PICK &amp; RENT A CAR)를 관리합니다. 단위: VND · 주간 06:00–20:00 / 야간 20:00–06:00.</p>
+    <div class="card"><h3><span class="k"></span>지역 할증 / 주간 시간대</h3>
+      <div class="grid c4">
+        <div><label class="lbl">할증 지역 라벨</label><input data-act="fx" data-f="areaSurchargeLabel" value="${esc(f.areaSurchargeLabel)}"></div>
+        <div><label class="lbl">할증 금액 (VND)</label><input type="number" step="1000" data-act="fx" data-f="areaSurcharge" value="${f.areaSurcharge}"></div>
+        <div><label class="lbl">주간 시작</label><input type="time" data-act="fx" data-f="dayStart" value="${esc(f.dayStart)}"></div>
+        <div><label class="lbl">주간 종료</label><input type="time" data-act="fx" data-f="dayEnd" value="${esc(f.dayEnd)}"></div>
       </div>
+      <div class="hint">${esc(f.areaSurchargeLabel)} 지역은 픽업 요금에 <b>+${vnd(f.areaSurcharge)}</b> 가산됩니다.</div>
+    </div>
+    <div class="card"><h3><span class="k"></span>공항 픽업 요금 (PICK UP)<span class="sp"></span><button class="btn primary sm" data-act="fp-add">+ 픽업 구간 추가</button></h3>
+      <div class="scroll-x"><table class="tbl" style="min-width:660px"><thead><tr><th>구간</th><th>시간대</th>${seatHead}<th></th></tr></thead><tbody>${pickRows}</tbody></table></div>
+    </div>
+    <div class="card"><h3><span class="k"></span>대절(시간제) 요금 (RENT A CAR)<span class="sp"></span><button class="btn primary sm" data-act="fr-add">+ 대절 상품 추가</button></h3>
+      <div class="scroll-x"><table class="tbl" style="min-width:600px"><thead><tr><th>상품</th>${seatHead}<th></th></tr></thead><tbody>${rentRows}</tbody></table></div>
     </div>`;
 };
 
@@ -651,10 +679,11 @@ RENDER.config=()=>{
 document.addEventListener("input",e=>{
   const t=e.target, act=t.dataset.act; if(!act) return;
   const i=+t.dataset.i;
-  if(act==="fare"){ const o=t.dataset.o,d=t.dataset.d; (AdminState.fares.matrix[o]=AdminState.fares.matrix[o]||{})[d]=+t.value; }
-  else if(act==="fare-base") AdminState.fares.sameZone=+t.value;
-  else if(act==="fare-surch") AdminState.fares.luggageSurcharge=+t.value;
-  else if(act==="fare-thr") AdminState.fares.luggageThreshold=+t.value;
+  if(act==="fp"){ AdminState.fares.pickup[i][t.dataset.p][t.dataset.s]=+t.value; }
+  else if(act==="fp-name"){ AdminState.fares.pickup[i].name=t.value; }
+  else if(act==="fr"){ AdminState.fares.rental[i][t.dataset.s]=+t.value; }
+  else if(act==="fr-name"){ AdminState.fares.rental[i].name=t.value; }
+  else if(act==="fx"){ const fld=t.dataset.f; AdminState.fares[fld]=(fld==="areaSurcharge")?+t.value:t.value; }
   else if(act==="vh"){ const f=t.dataset.f; AdminState.vehicles[i][f]=(f==="seats"||f==="mult")?+t.value:t.value; }
   else if(act==="pl"){ const f=t.dataset.f; AdminState.places[i][f]=(f==="lat"||f==="lng")?+t.value:t.value; }
   else if(act==="pay"){ const f=t.dataset.f; if(f==="enabled") AdminState.payments[i].enabled=t.value==="1"; else AdminState.payments[i][f]=t.value; }
@@ -671,6 +700,10 @@ document.addEventListener("click",e=>{
   else if(act==="vh-del"){ AdminState.vehicles.splice(i,1); RENDER.vehicles(); saveState("차량이 삭제되었습니다"); }
   else if(act==="pl-add"){ AdminState.places.push({id:"place"+Date.now(),nameKo:"새 장소",nameEn:"New place",nameVi:"Địa điểm mới",zone:"city",lat:12.2388,lng:109.1965}); RENDER.places(); saveState("장소가 추가되었습니다"); }
   else if(act==="pl-del"){ AdminState.places.splice(i,1); RENDER.places(); saveState("장소가 삭제되었습니다"); }
+  else if(act==="fp-add"){ AdminState.fares.pickup.push({id:"pk"+Date.now(),name:"새 픽업 구간",day:{s4:0,s7:0,s16:0},night:{s4:0,s7:0,s16:0}}); RENDER.fares(); saveState("픽업 구간이 추가되었습니다"); }
+  else if(act==="fp-del"){ AdminState.fares.pickup.splice(i,1); RENDER.fares(); saveState("픽업 구간이 삭제되었습니다"); }
+  else if(act==="fr-add"){ AdminState.fares.rental.push({id:"rt"+Date.now(),name:"새 대절 상품",s4:0,s7:0,s16:0}); RENDER.fares(); saveState("대절 상품이 추가되었습니다"); }
+  else if(act==="fr-del"){ AdminState.fares.rental.splice(i,1); RENDER.fares(); saveState("대절 상품이 삭제되었습니다"); }
   else if(act==="dv-add"){ AdminState.drivers.push({id:"DRV-"+Math.floor(1000+AdminState.drivers.length),name:"새 기사",car:"차량",plate:"79A-000.00",rating:5.0,status:"offline"}); RENDER.drivers(); saveState("기사가 추가되었습니다"); }
   else if(act==="dv-del"){ AdminState.drivers.splice(i,1); RENDER.drivers(); saveState("기사가 삭제되었습니다"); }
   else if(act==="bk-chk"){ updateBkSelCount(); }
@@ -731,6 +764,7 @@ window.addEventListener("storage",e=>{
 
 /* ---- 시작 ---- */
 const _saved=ConfigStore.load(); if(_saved){ Object.assign(AdminState,_saved); }  // 이전에 저장한 설정/매출 복원
+if(!AdminState.fares || !Array.isArray(AdminState.fares.pickup)) AdminState.fares=makeFares();  // 구버전(매트릭스) 설정 마이그레이션
 applyBranding();
 RENDER.dashboard();
 </script>
