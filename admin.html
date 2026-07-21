@@ -331,19 +331,20 @@ function go(pane){
  * 대시보드
  * ========================================================================== */
 RENDER.dashboard=()=>{
-  const b=AdminState.bookings;
-  const todayCount=b.length;
-  const revenue=b.filter(x=>x.status!=="CANCELLED").reduce((s,x)=>s+x.fare,0);
+  const b=AdminState.bookings, today=saleDate();
+  const todayCount=b.filter(x=>x.date===today).length;                       // 오늘 접수 예약
+  const todayRevenue=AdminState.sales.filter(s=>s.date===today).reduce((a,s)=>a+s.amount,0); // 오늘 매출(완료 기준)
   const running=b.filter(x=>["ENROUTE","ONBOARD","ASSIGNED"].includes(x.status)).length;
+  const waiting=b.filter(x=>x.status==="REQUESTED").length;
   const openCmp=AdminState.complaints.filter(x=>x.status==="OPEN").length;
   const rows=b.slice(0,6).map(x=>`<tr><td class="mono">${esc(x.id)}</td><td>${esc(x.time)}</td><td>${esc(x.customer)}</td><td>${esc(x.origin)} → ${esc(x.dest)}</td><td class="num">${vnd(x.fare)}</td><td><span class="pill st-${x.status}">${STATUS_LABEL[x.status]}</span></td></tr>`).join("");
   $("pane-dashboard").innerHTML=`
-    <h2>대시보드</h2><p class="desc">오늘의 운영 현황 요약입니다. (데모 데이터)</p>
+    <h2>대시보드</h2><p class="desc">오늘의 운영 현황 요약입니다.</p>
     <div class="kpis">
-      <div class="kpi"><div class="label">오늘 예약</div><div class="val">${todayCount}<span style="font-size:14px;color:var(--muted)"> 건</span></div><div class="sub">전일 대비 +3</div></div>
-      <div class="kpi"><div class="label">오늘 매출</div><div class="val lime">${vnd(revenue)}</div><div class="sub">≈ ${krw(revenue)}</div></div>
-      <div class="kpi"><div class="label">운행중</div><div class="val">${running}<span style="font-size:14px;color:var(--muted)"> 대</span></div><div class="sub">배차 대기 ${b.filter(x=>x.status==="REQUESTED").length}건</div></div>
-      <div class="kpi"><div class="label">대기 컴플레인</div><div class="val" style="color:${openCmp?'var(--danger)':'var(--text)'}">${openCmp}<span style="font-size:14px;color:var(--muted)"> 건</span></div><div class="sub">즉시 처리 필요</div></div>
+      <div class="kpi"><div class="label">오늘 예약</div><div class="val">${todayCount}<span style="font-size:14px;color:var(--muted)"> 건</span></div><div class="sub">${esc(today)}</div></div>
+      <div class="kpi"><div class="label">오늘 매출</div><div class="val lime">${vnd(todayRevenue)}</div><div class="sub">${todayRevenue?("≈ "+krw(todayRevenue)):"완료된 운행 기준"}</div></div>
+      <div class="kpi"><div class="label">운행중</div><div class="val">${running}<span style="font-size:14px;color:var(--muted)"> 대</span></div><div class="sub">배차 대기 ${waiting}건</div></div>
+      <div class="kpi"><div class="label">대기 컴플레인</div><div class="val" style="color:${openCmp?'var(--danger)':'var(--text)'}">${openCmp}<span style="font-size:14px;color:var(--muted)"> 건</span></div><div class="sub">${openCmp?"처리 필요":"없음"}</div></div>
     </div>
     <div class="card"><h3><span class="k"></span>최근 예약</h3><div class="scroll-x"><table class="tbl"><thead><tr><th>예약번호</th><th>시간</th><th>고객</th><th>경로</th><th class="num">요금</th><th>상태</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 };
