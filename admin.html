@@ -276,7 +276,16 @@ const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&g
 const vnd=n=>"₫"+Number(n||0).toLocaleString("vi-VN");
 const krw=n=>"₩"+Math.round(Number(n||0)*AdminState.branding.vndToKrw).toLocaleString("ko-KR");
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); clearTimeout(t._t); t._t=setTimeout(()=>t.classList.remove("show"),2200); }
-function saveState(msg){ /* TODO(handoff): 여기서 서버 API/Firebase로 저장. 현재는 메모리 반영. */ toast(msg||"저장되었습니다"); }
+/* ConfigStore — 소비자앱(index.html)과 공유하는 설정 저장소(같은 도메인 localStorage).
+   여기 저장하면 소비자앱이 읽어서 반영한다.
+   TODO(handoff): 실서비스는 save()를 서버 API/Firebase 쓰기로 교체. */
+const ConfigStore = {
+  KEY:"taxiK_config_v1",
+  save(s){ try{ localStorage.setItem(this.KEY, JSON.stringify(s)); return true; }catch(e){ return false; } },
+  load(){ try{ const x=localStorage.getItem(this.KEY); return x?JSON.parse(x):null; }catch(e){ return null; } }
+};
+let _autosaveT; function scheduleAutosave(){ clearTimeout(_autosaveT); _autosaveT=setTimeout(()=>ConfigStore.save(AdminState),300); }
+function saveState(msg){ const ok=ConfigStore.save(AdminState); toast(msg||(ok?"저장되었습니다 · 소비자앱에 반영됩니다":"저장되었습니다(메모리)")); }
 function zoneName(id){ return AdminState.zones[id]||id; }
 
 /* ============================================================================
@@ -535,6 +544,7 @@ document.addEventListener("input",e=>{
   else if(act==="i18n"){ AdminState.i18n[I18N_LANG][t.dataset.k]=t.value; }
   else if(act==="bk-status"){ AdminState.bookings[i].status=t.value; }
   else if(act==="bk-driver"){ AdminState.bookings[i].driver=t.value; }
+  scheduleAutosave();   // 입력 변경 시 자동 저장 → 소비자앱에 반영
 });
 document.addEventListener("click",e=>{
   const b=e.target.closest("[data-act]"); if(!b) return; const act=b.dataset.act; const i=+b.dataset.i;
@@ -566,7 +576,7 @@ function downloadConfig(){
 $("importFile").addEventListener("change",e=>{
   const file=e.target.files[0]; if(!file) return;
   const reader=new FileReader();
-  reader.onload=()=>{ try{ const data=JSON.parse(reader.result); Object.assign(AdminState,data); go("config"); toast("설정을 불러왔습니다"); }catch(err){ toast("JSON 형식 오류: 불러오지 못했습니다"); } };
+  reader.onload=()=>{ try{ const data=JSON.parse(reader.result); Object.assign(AdminState,data); ConfigStore.save(AdminState); go("config"); toast("설정을 불러와 저장했습니다"); }catch(err){ toast("JSON 형식 오류: 불러오지 못했습니다"); } };
   reader.readAsText(file); e.target.value="";
 });
 
@@ -574,6 +584,7 @@ $("importFile").addEventListener("change",e=>{
 function applyBranding(){ const r=document.documentElement.style; r.setProperty("--lime",AdminState.branding.pointColor); r.setProperty("--emerald",AdminState.branding.accent); }
 
 /* ---- 시작 ---- */
+const _saved=ConfigStore.load(); if(_saved){ Object.assign(AdminState,_saved); }  // 이전에 저장한 설정 복원
 applyBranding();
 RENDER.dashboard();
 </script>

@@ -439,11 +439,13 @@ const FareService = {
     nhatrang_s:{airport:38,city:9,vinwonders:29,beach:34,honchong:11,nhatrang_s:0},
     honchong:{airport:37,city:5,vinwonders:30,beach:33,nhatrang_s:11,honchong:0}
   },
+  // 아래 3개 값은 관리자(admin.html) 설정으로 덮어쓸 수 있음(applyConfig)
+  sameZone:60000, luggageSurcharge:40000, luggageThreshold:4,
   quote(origin,dest,{luggage=0, vehicleMult=1}={}){
     if(!origin||!dest) return null;
-    let base = origin===dest ? 60000 : (this.MATRIX[origin]?.[dest] ?? 0);
+    let base = origin===dest ? this.sameZone : (this.MATRIX[origin]?.[dest] ?? 0);
     base = Math.round(base * vehicleMult / 1000) * 1000;
-    const surcharge = luggage>=4 ? 40000 : 0;
+    const surcharge = luggage>=this.luggageThreshold ? this.luggageSurcharge : 0;
     const vnd = base + surcharge;
     return { vnd, krw:Math.round(vnd*CONFIG.vndToKrw), distanceKm:(this.DIST[origin]?.[dest] ?? 0), surcharge };
   }
@@ -673,7 +675,7 @@ const App = {
     this.els.payGrid.innerHTML = PaymentService.list().map(p=>{
       const soon=p.enabled?"":`<span class="tag">${I18nService.t("soon")}</span>`;
       const cls="pay-opt"+(p.enabled?"":" soon")+(PaymentService.selected===p.key?" active":"");
-      return `<div class="${cls}" data-pay="${p.key}" ${p.enabled?"":'data-disabled="1"'}><span class="ic">${p.icon}</span>${I18nService.t(p.labelKey)}${soon}</div>`;
+      return `<div class="${cls}" data-pay="${p.key}" ${p.enabled?"":'data-disabled="1"'}><span class="ic">${p.icon}</span>${p._label||I18nService.t(p.labelKey)}${soon}</div>`;
     }).join("");
   },
   renderVehicles(){
@@ -879,7 +881,63 @@ const App = {
   toast(msg){ const t=this.els.toast; t.textContent=msg; t.classList.add("show"); clearTimeout(this._tt); this._tt=setTimeout(()=>t.classList.remove("show"),2600); }
 };
 
+/* ============================================================================
+ * ConfigStore — 관리자(admin.html)와 공유하는 설정 저장소
+ *   같은 도메인의 localStorage로 관리자 변경을 소비자앱에 반영한다.
+ *   - 관리자에서 저장 → 이 앱 새로고침/탭 전환 시 자동 반영(같은 브라우저).
+ *   - localStorage 미지원 환경(일부 미리보기)에서는 내장 기본값으로 안전 동작.
+ *   - TODO(handoff): 실서비스는 load()를 서버 API/Firebase 실시간 구독으로 교체하면
+ *     여러 기기·실시간 동기화가 됩니다. (아래 매핑 로직은 그대로 재사용)
+ * ========================================================================== */
+const ConfigStore = {
+  KEY:"taxiK_config_v1",
+  load(){ try{ const s=localStorage.getItem(this.KEY); return s?JSON.parse(s):null; }catch(e){ return null; } }
+};
+/* 관리자 설정(cfg) → 소비자앱 내부 구조에 반영 */
+function applyConfig(cfg){
+  try{
+    if(!cfg) return;
+    const b=cfg.branding||{};
+    if(b.vndToKrw) CONFIG.vndToKrw=+b.vndToKrw;
+    if(b.defaultLang){ CONFIG.defaultLang=b.defaultLang; I18nService.lang=b.defaultLang; document.documentElement.lang=b.defaultLang; }
+    if(b.pointColor) document.documentElement.style.setProperty("--lime",b.pointColor);
+    if(b.accent) document.documentElement.style.setProperty("--emerald",b.accent);
+    // 구역 이름(한국어)
+    if(cfg.zones) for(const z in cfg.zones){ if(DICT.ko.zones[z]!==undefined) DICT.ko.zones[z]=cfg.zones[z]; }
+    // 요금(정찰제)
+    if(cfg.fares){
+      if(cfg.fares.matrix) FareService.MATRIX=JSON.parse(JSON.stringify(cfg.fares.matrix));
+      if(cfg.fares.sameZone!=null) FareService.sameZone=+cfg.fares.sameZone;
+      if(cfg.fares.luggageSurcharge!=null) FareService.luggageSurcharge=+cfg.fares.luggageSurcharge;
+      if(cfg.fares.luggageThreshold!=null) FareService.luggageThreshold=+cfg.fares.luggageThreshold;
+    }
+    // 차량 등급
+    if(Array.isArray(cfg.vehicles)&&cfg.vehicles.length){
+      const tags=["veh_base","veh_premium","veh_large"];
+      VEHICLES.length=0;
+      cfg.vehicles.forEach((v,i)=>VEHICLES.push({ id:v.id||("veh"+i), name:{ko:v.name,en:v.name,vi:v.name}, seats:+v.seats||4, mult:+v.mult||1, tagKey:tags[Math.min(i,2)], icon:v.icon||"🚗", type:v.type||"CUSTOM" }));
+    }
+    // 장소(POI)
+    if(Array.isArray(cfg.places)&&cfg.places.length){
+      PlacesService.POIS.length=0;
+      cfg.places.forEach(p=>PlacesService.POIS.push({ id:p.id, cat:"📍", zoneId:p.zone, coords:[+p.lat,+p.lng], hint:I18nService.zoneName(p.zone), name:{ko:p.nameKo,en:p.nameEn||p.nameKo,vi:p.nameVi||p.nameKo} }));
+      PlacesService.POPULAR=cfg.places.slice(0,6).map(p=>p.id);
+    }
+    // 결제수단
+    if(Array.isArray(cfg.payments)){
+      cfg.payments.forEach(p=>{ const prov=PaymentService._providers.get(p.key); if(prov){ prov.enabled=!!p.enabled; prov._label=p.label; } });
+      const sel=PaymentService._providers.get(PaymentService.selected);
+      if(!sel||!sel.enabled){ const first=PaymentService.list().find(x=>x.enabled); if(first) PaymentService.selected=first.key; }
+    }
+    // 다국어 문구
+    if(cfg.i18n) for(const lang in cfg.i18n){ if(DICT[lang]) Object.assign(DICT[lang],cfg.i18n[lang]); }
+  }catch(e){ console.warn("applyConfig 실패 — 기본값 사용", e); }
+}
+
+applyConfig(ConfigStore.load());                       // 시작 시 관리자 설정 반영
 document.addEventListener("DOMContentLoaded",()=>App.init());
+// 관리자 탭에서 설정을 저장하면 자동 반영(같은 브라우저)
+window.addEventListener("storage",e=>{ if(e.key===ConfigStore.KEY) location.reload(); });
 </script>
 </body>
 </html>
