@@ -175,6 +175,9 @@ textarea{resize:vertical;min-height:64px;}
 .fare .amt{font-size:26px;font-weight:900;color:var(--lime);}
 .fare .krw{font-size:12px;color:var(--muted);font-weight:700;}
 .fare-note{font-size:11px;color:var(--muted);margin-top:8px;line-height:1.5;}
+.period-badge{font-size:11px;font-weight:800;padding:3px 10px;border-radius:999px;border:1px solid var(--line);white-space:nowrap;}
+.period-badge.day{color:var(--muted);}
+.period-badge.night{color:var(--warn);border-color:#4a4326;background:rgba(255,207,77,.12);}
 
 /* CTA */
 .cta-bar{position:sticky;bottom:0;padding:14px 16px calc(14px + env(safe-area-inset-bottom));background:linear-gradient(0deg,var(--bg) 78%,#0b0c0b00);}
@@ -281,7 +284,7 @@ details.dev code{background:#000;padding:1px 6px;border-radius:5px;color:var(--e
 
     <!-- 요금 요약 -->
     <section class="card">
-      <h3><span class="k"></span><span data-i18n="section_fare">예상 요금 (정찰제)</span></h3>
+      <h3><span class="k"></span><span data-i18n="section_fare">예상 요금 (정찰제)</span><span style="flex:1"></span><span id="farePeriod" class="period-badge"></span></h3>
       <div class="fare">
         <div><div class="amt" id="fareVnd">₫0</div><div class="krw" id="fareKrw">≈ ₩0</div></div>
         <div style="text-align:right"><div style="font-size:12px;color:var(--muted)" data-i18n="distance">거리</div><div style="font-weight:800" id="distTxt">-- km</div></div>
@@ -351,6 +354,7 @@ const DICT = {
     section_pay:"결제수단", pay_hint:"현장 결제(현금·GLN) 즉시 지원 · 온라인 PG는 순차 오픈",
     section_fare:"예상 요금 (정찰제)", distance:"거리", fare_note:"구역 간 고정 요금이 적용되어 미터기 요금 흥정이 없습니다.",
     total_distance:"총 거리", est_time:"예상 소요", minute_unit:"분",
+    tag_day:"☀️ 주간 요금", tag_night:"🌙 야간 할증 (20:00–06:00)",
     section_log:"서버 전송 데이터 (기사앱/Admin)",
     log_empty:"[예약하기]를 누르면 기사용/관리자용 서버로 전송될 JSON 페이로드가 여기에 출력됩니다.",
     book:"예약하기", dev_title:"🛠 개발자 인수인계 노트 (아키텍처 / 교체 지점)",
@@ -373,6 +377,7 @@ const DICT = {
     section_pay:"Payment", pay_hint:"Cash & GLN on-site now · online PG rolling out",
     section_fare:"Fixed fare estimate", distance:"Distance", fare_note:"Zone-to-zone fixed pricing — no meter, no haggling.",
     total_distance:"Total distance", est_time:"Est. time", minute_unit:"min",
+    tag_day:"☀️ Day rate", tag_night:"🌙 Night rate (20:00–06:00)",
     section_log:"Server payload (Driver/Admin)",
     log_empty:"Press [Book] to preview the JSON payload sent to the Driver/Admin servers.",
     book:"Book now", dev_title:"🛠 Developer handoff notes (architecture / swap points)",
@@ -395,6 +400,7 @@ const DICT = {
     section_pay:"Thanh toán", pay_hint:"Tiền mặt & GLN tại chỗ · PG online sắp có",
     section_fare:"Giá cố định dự kiến", distance:"Khoảng cách", fare_note:"Giá cố định theo khu — không đồng hồ, không mặc cả.",
     total_distance:"Tổng quãng đường", est_time:"Thời gian", minute_unit:"phút",
+    tag_day:"☀️ Giá ngày", tag_night:"🌙 Giá đêm (20:00–06:00)",
     section_log:"Dữ liệu gửi server (Tài xế/Admin)",
     log_empty:"Nhấn [Đặt xe] để xem JSON gửi tới server.",
     book:"Đặt xe", dev_title:"🛠 Ghi chú bàn giao (kiến trúc / điểm thay thế)",
@@ -662,7 +668,7 @@ const BookingService = {
       trip:{ origin:place(form.origin), destination:place(form.dest),
              vehicle:{ classId:v.id, seats:v.seats, name:v.name[I18nService.lang]||v.name.ko, vehicleType:v.type, fareMultiplier:v.mult },
              passengers:form.pax, largeLuggage:form.luggage, note:form.note||null, pickupPhotos:form.photos, routeDistanceKm:form.routeKm??null },
-      fare:{ currency:"VND", fixed:true, amountVnd:fare?.vnd??0, amountKrwApprox:fare?.krw??0, surchargeVnd:fare?.surcharge??0, distanceKm:form.routeKm??fare?.distanceKm??0 },
+      fare:{ currency:"VND", fixed:true, amountVnd:fare?.vnd??0, amountKrwApprox:fare?.krw??0, surchargeVnd:fare?.surcharge??0, distanceKm:form.routeKm??fare?.distanceKm??0, period:(fare&&fare.period)||(FareService._isDay()?"day":"night") },
       payment:{ method:PaymentService.selected, status:"PENDING" },
       dispatch:{ assignedDriverId:null, vehicleType:v.type, seats:v.seats, etaMin:null },
       admin:{ region:"NHA_TRANG", complaint:null, refund:null, settlement:{status:"UNSETTLED"} }
@@ -692,7 +698,7 @@ const App = {
     this.els={ fieldOrigin:$("fieldOrigin"), fieldDest:$("fieldDest"), swapBtn:$("swapBtn"),
       pax:$("pax"), luggage:$("luggage"), note:$("note"), payGrid:$("payGrid"), vehGrid:$("vehGrid"),
       fareVnd:$("fareVnd"), fareKrw:$("fareKrw"), distTxt:$("distTxt"), console:$("console"), bookBtn:$("bookBtn"),
-      routeSummary:$("routeSummary"), rsDist:$("rsDist"), rsTime:$("rsTime"),
+      routeSummary:$("routeSummary"), rsDist:$("rsDist"), rsTime:$("rsTime"), farePeriod:$("farePeriod"),
       uploadBox:$("uploadBox"), photoInput:$("photoInput"), thumbs:$("thumbs"), langSwitch:$("langSwitch"), toast:$("toast"), etaPill:$("etaPill"),
       searchModal:$("searchModal"), smBack:$("smBack"), smTitle:$("smTitle"), smInput:$("smInput"), smBody:$("smBody"), actCurrent:$("actCurrent"), actMap:$("actMap") };
   },
@@ -868,6 +874,13 @@ const App = {
   onLangChange(){ this.renderPayments(); this.renderVehicles(); this.updateFieldUI(); this.recalcFare(); if(this._routeKm!=null) this.updateRouteSummary(this._routeKm,this._routeMin); if(this.els.searchModal.classList.contains("open")) this.renderPlaceList(this.els.smInput.value); },
   recalcFare(){
     this.renderVehicles();
+    // 주간/야간 표시 (20:00–06:00 야간 할증)
+    const night=!FareService._isDay();
+    if(this.els.farePeriod){
+      const has=this.selectedOrigin&&this.selectedDest;
+      this.els.farePeriod.className="period-badge "+(night?"night":"day");
+      this.els.farePeriod.textContent=has?I18nService.t(night?"tag_night":"tag_day"):"";
+    }
     if(!this.selectedOrigin||!this.selectedDest){ this.els.fareVnd.textContent="₫0"; this.els.fareKrw.textContent="≈ ₩0"; this.els.distTxt.textContent="-- km"; return; }
     const q=FareService.quote(this.selectedOrigin.zoneId,this.selectedDest.zoneId,{luggage:+this.els.luggage.value, seats:this.selectedVehicle?.seats||7});
     this.els.fareVnd.textContent="₫"+(q?.vnd??0).toLocaleString(CONFIG.currencyLocale);
