@@ -209,6 +209,7 @@ textarea.json{min-height:320px;font-family:ui-monospace,Menlo,Consolas,monospace
 const ZONE_IDS = ["airport","city","vinwonders","beach","nhatrang_s","honchong"];
 const AdminState = {
   branding:{ appName:"택시케이", pointColor:"#b6ff3a", accent:"#12c67a", defaultLang:"ko", mapProvider:"osm", vndToKrw:0.056 },
+  brandingDefaults:{ pointColor:"#b6ff3a", accent:"#12c67a" }, // '고정' 버튼으로 저장되는 기본 색상 / '초기화'가 여기로 되돌림
   zones:{ airport:"깜란 국제공항", city:"시내 중심가", vinwonders:"빈원더스/빈펄", beach:"북부 해변", nhatrang_s:"나트랑 남부", honchong:"혼쫑 곶" },
   fares:{
     sameZone:60000, luggageSurcharge:40000, luggageThreshold:4,
@@ -487,7 +488,7 @@ RENDER.payments=()=>{
  * 브랜딩/디자인 — 앱 이름, 포인트 색상, 기본 언어, 지도, 환율
  * ========================================================================== */
 RENDER.branding=()=>{
-  const b=AdminState.branding;
+  const b=AdminState.branding, d=AdminState.brandingDefaults;
   $("pane-branding").innerHTML=`
     <h2>브랜딩 / 디자인</h2><p class="desc">앱 이름·색상·기본 언어·지도 제공자를 코딩 없이 바꿉니다.</p>
     <div class="card"><h3><span class="k"></span>기본 정보</h3>
@@ -501,7 +502,16 @@ RENDER.branding=()=>{
         <div><label class="lbl">메인 라임/포인트</label><div class="color-row"><input type="color" data-act="br" data-f="pointColor" value="${b.pointColor}"><span class="mono">${esc(b.pointColor)}</span></div></div>
         <div><label class="lbl">에메랄드/보조</label><div class="color-row"><input type="color" data-act="br" data-f="accent" value="${b.accent}"><span class="mono">${esc(b.accent)}</span></div></div>
       </div>
-      <div class="hint">색상을 바꾸면 이 관리자 화면의 포인트 색도 즉시 미리보기됩니다.</div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:16px;flex-wrap:wrap">
+        <button class="btn primary sm" data-act="br-pin">📌 이 색상으로 고정</button>
+        <button class="btn sm" data-act="br-reset">↺ 고정 색상으로 초기화</button>
+        <span style="font-size:11px;color:var(--muted);display:inline-flex;align-items:center;gap:5px">고정된 기본색:
+          <span style="display:inline-block;width:13px;height:13px;border-radius:3px;background:${esc(d.pointColor)};border:1px solid var(--line)"></span>
+          <span style="display:inline-block;width:13px;height:13px;border-radius:3px;background:${esc(d.accent)};border:1px solid var(--line)"></span>
+          <span class="mono">${esc(d.pointColor)} / ${esc(d.accent)}</span>
+        </span>
+      </div>
+      <div class="hint">색상을 바꾸면 관리자·소비자앱 포인트 색이 미리보기됩니다. <b>고정</b>은 지금 색을 기본값으로 저장하고, <b>초기화</b>는 고정한 기본값으로 되돌립니다.</div>
     </div>
     <div class="card"><h3><span class="k"></span>지도 / 환율</h3>
       <div class="grid c2">
@@ -581,6 +591,8 @@ document.addEventListener("click",e=>{
     idx.sort((a,z)=>z-a).forEach(k=>AdminState.bookings.splice(k,1));  // 인덱스 큰 것부터 삭제
     RENDER.dispatch(); saveState(idx.length+"건을 삭제했습니다");
   }
+  else if(act==="br-pin"){ AdminState.brandingDefaults={ pointColor:AdminState.branding.pointColor, accent:AdminState.branding.accent }; RENDER.branding(); saveState("현재 색상을 기본값으로 고정했습니다"); }
+  else if(act==="br-reset"){ AdminState.branding.pointColor=AdminState.brandingDefaults.pointColor; AdminState.branding.accent=AdminState.brandingDefaults.accent; applyBranding(); RENDER.branding(); saveState("고정된 색상으로 되돌렸습니다"); }
   else if(act==="cmp-toggle"){ const c=AdminState.complaints[i]; c.status=c.status==="OPEN"?"RESOLVED":"OPEN"; RENDER.complaints(); saveState("컴플레인 상태가 변경되었습니다"); }
   else if(act==="cmp-chk"){ updateCmpSelCount(); }
   else if(act==="cmp-all"){ document.querySelectorAll(".cmp-chk").forEach(c=>c.checked=b.checked); updateCmpSelCount(); }
