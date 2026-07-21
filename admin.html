@@ -21,6 +21,8 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>택시케이 Admin · 관리자 콘솔</title>
+<!-- 엑셀(.xlsx) 내보내기 라이브러리: SheetJS (미로딩 시 CSV로 폴백) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <style>
 :root{
   --bg:#0b0c0b; --surface:#111111; --surface-2:#1a1c1a; --surface-3:#202320; --line:#2a2d2a;
@@ -159,6 +161,7 @@ textarea.json{min-height:320px;font-family:ui-monospace,Menlo,Consolas,monospace
       <div class="sep">운영</div>
       <button data-pane="dashboard" class="active"><span class="ic">📊</span>대시보드</button>
       <button data-pane="dispatch"><span class="ic">🚕</span>배차 관리</button>
+      <button data-pane="revenue"><span class="ic">📈</span>매출</button>
       <button data-pane="drivers"><span class="ic">🧑‍✈️</span>기사 관리</button>
       <button data-pane="complaints"><span class="ic">📮</span>컴플레인</button>
       <div class="sep">설정 (노코드 수정)</div>
@@ -185,6 +188,7 @@ textarea.json{min-height:320px;font-family:ui-monospace,Menlo,Consolas,monospace
     <div class="content">
       <div class="pane active" id="pane-dashboard"></div>
       <div class="pane" id="pane-dispatch"></div>
+      <div class="pane" id="pane-revenue"></div>
       <div class="pane" id="pane-drivers"></div>
       <div class="pane" id="pane-complaints"></div>
       <div class="pane" id="pane-fares"></div>
@@ -264,8 +268,22 @@ const AdminState = {
     {id:"CMP-014",booking:"KTX-2026-1038",customer:"정하준",type:"기사 지각",status:"OPEN",note:"픽업이 15분 지연됨"},
     {id:"CMP-013",booking:"KTX-2026-1031",customer:"홍길동",type:"요금 문의",status:"RESOLVED",note:"정찰제 안내 후 해결"}
   ],
-  revenueWeek:[
-    {d:"월",v:4.2},{d:"화",v:5.1},{d:"수",v:3.8},{d:"목",v:6.0},{d:"금",v:7.4},{d:"토",v:9.1},{d:"일",v:8.3}
+  /* 매출 원장(샘플) — 실서비스에서는 완료된 예약/결제 트랜잭션으로 채워짐 */
+  sales:[
+    {date:"2026-06-03",bookingId:"KTX-2026-0912",vehicle:"7인승",pay:"현금",amount:513000},
+    {date:"2026-06-08",bookingId:"KTX-2026-0921",vehicle:"4인승",pay:"GLN",amount:320000},
+    {date:"2026-06-12",bookingId:"KTX-2026-0930",vehicle:"16인승",pay:"현금",amount:760000},
+    {date:"2026-06-17",bookingId:"KTX-2026-0944",vehicle:"7인승",pay:"VNPAY",amount:405000},
+    {date:"2026-06-21",bookingId:"KTX-2026-0959",vehicle:"7인승",pay:"현금",amount:250000},
+    {date:"2026-06-25",bookingId:"KTX-2026-0970",vehicle:"4인승",pay:"현금",amount:180000},
+    {date:"2026-06-29",bookingId:"KTX-2026-0988",vehicle:"7인승",pay:"GLN",amount:338000},
+    {date:"2026-07-02",bookingId:"KTX-2026-1003",vehicle:"16인승",pay:"현금",amount:840000},
+    {date:"2026-07-05",bookingId:"KTX-2026-1012",vehicle:"7인승",pay:"현금",amount:513000},
+    {date:"2026-07-09",bookingId:"KTX-2026-1020",vehicle:"4인승",pay:"VNPAY",amount:300000},
+    {date:"2026-07-12",bookingId:"KTX-2026-1027",vehicle:"7인승",pay:"현금",amount:120000},
+    {date:"2026-07-15",bookingId:"KTX-2026-1033",vehicle:"7인승",pay:"GLN",amount:405000},
+    {date:"2026-07-18",bookingId:"KTX-2026-1039",vehicle:"16인승",pay:"현금",amount:760000},
+    {date:"2026-07-20",bookingId:"KTX-2026-1041",vehicle:"7인승",pay:"현금",amount:320000}
   ]
 };
 const BOOKING_STATUSES = ["REQUESTED","ASSIGNED","ENROUTE","ONBOARD","DONE","CANCELLED"];
@@ -293,7 +311,7 @@ function zoneName(id){ return AdminState.zones[id]||id; }
  * 라우터 — 사이드바 네비게이션
  * ========================================================================== */
 const RENDER = {}; // 각 pane 렌더 함수 등록
-const NAV_TITLE = { dashboard:"대시보드", dispatch:"배차 관리", drivers:"기사 관리", complaints:"컴플레인", fares:"요금 설정", vehicles:"차량 관리", places:"장소 관리", payments:"결제수단", branding:"브랜딩/디자인", i18n:"다국어 문구", config:"설정 내보내기/가져오기" };
+const NAV_TITLE = { dashboard:"대시보드", dispatch:"배차 관리", revenue:"매출", drivers:"기사 관리", complaints:"컴플레인", fares:"요금 설정", vehicles:"차량 관리", places:"장소 관리", payments:"결제수단", branding:"브랜딩/디자인", i18n:"다국어 문구", config:"설정 내보내기/가져오기" };
 function go(pane){
   document.querySelectorAll(".nav button").forEach(b=>b.classList.toggle("active",b.dataset.pane===pane));
   document.querySelectorAll(".pane").forEach(p=>p.classList.remove("active"));
@@ -312,8 +330,6 @@ RENDER.dashboard=()=>{
   const revenue=b.filter(x=>x.status!=="CANCELLED").reduce((s,x)=>s+x.fare,0);
   const running=b.filter(x=>["ENROUTE","ONBOARD","ASSIGNED"].includes(x.status)).length;
   const openCmp=AdminState.complaints.filter(x=>x.status==="OPEN").length;
-  const maxV=Math.max(...AdminState.revenueWeek.map(x=>x.v));
-  const bars=AdminState.revenueWeek.map(x=>`<div class="bar-col"><div class="bar-v">${x.v}M</div><div class="bar" style="height:${Math.round(x.v/maxV*100)}%"></div><div class="bar-x">${x.d}</div></div>`).join("");
   const rows=b.slice(0,6).map(x=>`<tr><td class="mono">${esc(x.id)}</td><td>${esc(x.time)}</td><td>${esc(x.customer)}</td><td>${esc(x.origin)} → ${esc(x.dest)}</td><td class="num">${vnd(x.fare)}</td><td><span class="pill st-${x.status}">${STATUS_LABEL[x.status]}</span></td></tr>`).join("");
   $("pane-dashboard").innerHTML=`
     <h2>대시보드</h2><p class="desc">오늘의 운영 현황 요약입니다. (데모 데이터)</p>
@@ -323,7 +339,6 @@ RENDER.dashboard=()=>{
       <div class="kpi"><div class="label">운행중</div><div class="val">${running}<span style="font-size:14px;color:var(--muted)"> 대</span></div><div class="sub">배차 대기 ${b.filter(x=>x.status==="REQUESTED").length}건</div></div>
       <div class="kpi"><div class="label">대기 컴플레인</div><div class="val" style="color:${openCmp?'var(--danger)':'var(--text)'}">${openCmp}<span style="font-size:14px;color:var(--muted)"> 건</span></div><div class="sub">즉시 처리 필요</div></div>
     </div>
-    <div class="card"><h3><span class="k"></span>주간 매출 추이 <span class="sp"></span><span style="font-size:11px;color:var(--muted)">단위: 백만 VND</span></h3><div class="bars">${bars}</div></div>
     <div class="card"><h3><span class="k"></span>최근 예약</h3><div class="scroll-x"><table class="tbl"><thead><tr><th>예약번호</th><th>시간</th><th>고객</th><th>경로</th><th class="num">요금</th><th>상태</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 };
 
@@ -356,6 +371,79 @@ RENDER.dispatch=()=>{
 };
 /* 선택 개수 표시 */
 function updateBkSelCount(){ const el=$("bkSelCount"); if(!el) return; const n=document.querySelectorAll(".bk-chk:checked").length; el.textContent=n?`${n}건 선택됨`:""; }
+
+/* ============================================================================
+ * 매출 — 달력 기간 선택 + 월별/일별 집계 + 엑셀 내보내기
+ * ========================================================================== */
+let RV={ from:null, to:null, group:"month" };
+RENDER.revenue=()=>{
+  const all=AdminState.sales.slice().sort((a,z)=>a.date<z.date?-1:1);
+  const dates=all.map(s=>s.date);
+  if(RV.from===null){ RV.from=dates[0]||""; RV.to=dates[dates.length-1]||""; }   // 최초 진입: 전체 기간
+  const from=RV.from, to=RV.to, grp=RV.group;
+  const filtered=all.filter(s=>(!from||s.date>=from)&&(!to||s.date<=to));
+  const total=filtered.reduce((s,x)=>s+x.amount,0), cnt=filtered.length, avg=cnt?Math.round(total/cnt):0;
+  // 그룹 집계
+  const map={};
+  filtered.forEach(s=>{ const k=grp==="month"?s.date.slice(0,7):s.date; (map[k]=map[k]||{amt:0,n:0}); map[k].amt+=s.amount; map[k].n++; });
+  const keys=Object.keys(map).sort();
+  const maxV=Math.max(1,...keys.map(k=>map[k].amt));
+  const bars=keys.map(k=>`<div class="bar-col"><div class="bar-v">${(map[k].amt/1e6).toFixed(1)}M</div><div class="bar" style="height:${Math.round(map[k].amt/maxV*100)}%"></div><div class="bar-x">${esc(grp==="month"?k.slice(5):k.slice(5))}</div></div>`).join("");
+  const grpRows=keys.map(k=>`<tr><td>${esc(k)}</td><td class="num">${vnd(map[k].amt)}</td><td class="num">${map[k].n}</td><td class="num">${vnd(Math.round(map[k].amt/map[k].n))}</td></tr>`).join("");
+  const months=[...new Set(dates.map(d=>d.slice(0,7)))].sort();
+  const quick=months.map(m=>`<button class="btn sm" data-rv="quick" data-m="${m}">${m}</button>`).join("")+`<button class="btn sm" data-rv="all">전체</button>`;
+  $("pane-revenue").innerHTML=`
+    <h2>매출</h2><p class="desc">달력에서 기간을 골라 매출을 확인하고 엑셀로 내보냅니다. (샘플 데이터 — 실서비스에서는 완료된 예약/결제로 자동 집계)</p>
+    <div class="card"><h3><span class="k"></span>기간 선택</h3>
+      <div class="grid c4" style="align-items:end">
+        <div><label class="lbl">시작일</label><input type="date" id="rvFrom" value="${esc(from)}"></div>
+        <div><label class="lbl">종료일</label><input type="date" id="rvTo" value="${esc(to)}"></div>
+        <div><label class="lbl">보기 단위</label><select id="rvGroup"><option value="month" ${grp==="month"?"selected":""}>월별</option><option value="day" ${grp==="day"?"selected":""}>일별</option></select></div>
+        <div><button class="btn primary" id="rvExport" style="width:100%">⬇ 엑셀로 내보내기</button></div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:12px">${quick}</div>
+    </div>
+    <div class="kpis">
+      <div class="kpi"><div class="label">기간 총매출</div><div class="val lime">${vnd(total)}</div><div class="sub">≈ ${krw(total)}</div></div>
+      <div class="kpi"><div class="label">건수</div><div class="val">${cnt}<span style="font-size:14px;color:var(--muted)"> 건</span></div><div class="sub">${esc(from||"-")} ~ ${esc(to||"-")}</div></div>
+      <div class="kpi"><div class="label">평균 객단가</div><div class="val">${vnd(avg)}</div><div class="sub">건당 평균</div></div>
+    </div>
+    <div class="card"><h3><span class="k"></span>${grp==="month"?"월별":"일별"} 매출 <span class="sp"></span><span style="font-size:11px;color:var(--muted)">단위: 백만 VND</span></h3>
+      ${keys.length?`<div class="bars">${bars}</div>`:`<div style="text-align:center;color:var(--muted);padding:26px">해당 기간에 매출 데이터가 없습니다.</div>`}</div>
+    <div class="card"><h3><span class="k"></span>상세 (${grp==="month"?"월별":"일별"})</h3>
+      <div class="scroll-x"><table class="tbl"><thead><tr><th>${grp==="month"?"월":"날짜"}</th><th class="num">매출</th><th class="num">건수</th><th class="num">평균</th></tr></thead>
+      <tbody>${grpRows||`<tr><td colspan="4" style="text-align:center;color:var(--muted);padding:20px">데이터 없음</td></tr>`}</tbody></table></div></div>`;
+  // 이벤트 바인딩
+  const bind=(id,ev,fn)=>{ const el=$(id); if(el) el.addEventListener(ev,fn); };
+  bind("rvFrom","change",e=>{ RV.from=e.target.value; RENDER.revenue(); });
+  bind("rvTo","change",e=>{ RV.to=e.target.value; RENDER.revenue(); });
+  bind("rvGroup","change",e=>{ RV.group=e.target.value; RENDER.revenue(); });
+  bind("rvExport","click",exportSalesExcel);
+  $("pane-revenue").querySelectorAll("[data-rv]").forEach(btn=>btn.addEventListener("click",()=>{
+    if(btn.dataset.rv==="all"){ RV.from=dates[0]||""; RV.to=dates[dates.length-1]||""; }
+    else if(btn.dataset.rv==="quick"){ const m=btn.dataset.m; RV.from=m+"-01"; RV.to=m+"-31"; }
+    RENDER.revenue();
+  }));
+};
+/* 선택 기간 매출 상세를 엑셀(.xlsx)로 내보내기 (SheetJS 미로딩 시 CSV 폴백) */
+function exportSalesExcel(){
+  const from=RV.from,to=RV.to;
+  const rows=AdminState.sales.filter(s=>(!from||s.date>=from)&&(!to||s.date<=to)).sort((a,z)=>a.date<z.date?-1:1)
+    .map(s=>({ 날짜:s.date, 예약번호:s.bookingId, 차량:s.vehicle, 결제수단:s.pay, "매출(VND)":s.amount }));
+  if(!rows.length){ toast("내보낼 데이터가 없습니다"); return; }
+  const fname=`택시케이_매출_${from||"all"}_${to||"all"}`;
+  if(window.XLSX){
+    const ws=XLSX.utils.json_to_sheet(rows);
+    const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,ws,"매출");
+    XLSX.writeFile(wb, fname+".xlsx");
+    toast("엑셀 파일을 저장했습니다");
+  }else{
+    const head=Object.keys(rows[0]).join(","); const body=rows.map(r=>Object.values(r).join(",")).join("\n");
+    const blob=new Blob(["﻿"+head+"\n"+body],{type:"text/csv;charset=utf-8"});
+    const url=URL.createObjectURL(blob); const a=document.createElement("a"); a.href=url; a.download=fname+".csv"; a.click(); URL.revokeObjectURL(url);
+    toast("CSV로 저장했습니다 (Excel에서 열림)");
+  }
+}
 
 /* ============================================================================
  * 기사 관리 — CRUD
