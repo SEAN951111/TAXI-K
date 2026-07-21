@@ -268,23 +268,9 @@ const AdminState = {
     {id:"CMP-014",booking:"KTX-2026-1038",customer:"정하준",type:"기사 지각",status:"OPEN",note:"픽업이 15분 지연됨"},
     {id:"CMP-013",booking:"KTX-2026-1031",customer:"홍길동",type:"요금 문의",status:"RESOLVED",note:"정찰제 안내 후 해결"}
   ],
-  /* 매출 원장(샘플) — 실서비스에서는 완료된 예약/결제 트랜잭션으로 채워짐 */
-  sales:[
-    {date:"2026-06-03",bookingId:"KTX-2026-0912",vehicle:"7인승",pay:"현금",amount:513000},
-    {date:"2026-06-08",bookingId:"KTX-2026-0921",vehicle:"4인승",pay:"GLN",amount:320000},
-    {date:"2026-06-12",bookingId:"KTX-2026-0930",vehicle:"16인승",pay:"현금",amount:760000},
-    {date:"2026-06-17",bookingId:"KTX-2026-0944",vehicle:"7인승",pay:"VNPAY",amount:405000},
-    {date:"2026-06-21",bookingId:"KTX-2026-0959",vehicle:"7인승",pay:"현금",amount:250000},
-    {date:"2026-06-25",bookingId:"KTX-2026-0970",vehicle:"4인승",pay:"현금",amount:180000},
-    {date:"2026-06-29",bookingId:"KTX-2026-0988",vehicle:"7인승",pay:"GLN",amount:338000},
-    {date:"2026-07-02",bookingId:"KTX-2026-1003",vehicle:"16인승",pay:"현금",amount:840000},
-    {date:"2026-07-05",bookingId:"KTX-2026-1012",vehicle:"7인승",pay:"현금",amount:513000},
-    {date:"2026-07-09",bookingId:"KTX-2026-1020",vehicle:"4인승",pay:"VNPAY",amount:300000},
-    {date:"2026-07-12",bookingId:"KTX-2026-1027",vehicle:"7인승",pay:"현금",amount:120000},
-    {date:"2026-07-15",bookingId:"KTX-2026-1033",vehicle:"7인승",pay:"GLN",amount:405000},
-    {date:"2026-07-18",bookingId:"KTX-2026-1039",vehicle:"16인승",pay:"현금",amount:760000},
-    {date:"2026-07-20",bookingId:"KTX-2026-1041",vehicle:"7인승",pay:"현금",amount:320000}
-  ]
+  /* 매출 원장 — 소비자앱에서 예약이 완료되면 자동으로 이 배열에 쌓인다.
+     TODO(handoff): 실서비스는 서버의 결제완료 트랜잭션으로 적재. */
+  sales:[]
 };
 const BOOKING_STATUSES = ["REQUESTED","ASSIGNED","ENROUTE","ONBOARD","DONE","CANCELLED"];
 const STATUS_LABEL = { REQUESTED:"대기", ASSIGNED:"배차완료", ENROUTE:"기사 이동중", ONBOARD:"운행중", DONE:"완료", CANCELLED:"취소", OPEN:"처리 대기", RESOLVED:"처리 완료", online:"온라인", offline:"오프라인" };
@@ -311,8 +297,10 @@ function zoneName(id){ return AdminState.zones[id]||id; }
  * 라우터 — 사이드바 네비게이션
  * ========================================================================== */
 const RENDER = {}; // 각 pane 렌더 함수 등록
+let CURRENT_PANE = "dashboard";
 const NAV_TITLE = { dashboard:"대시보드", dispatch:"배차 관리", revenue:"매출", drivers:"기사 관리", complaints:"컴플레인", fares:"요금 설정", vehicles:"차량 관리", places:"장소 관리", payments:"결제수단", branding:"브랜딩/디자인", i18n:"다국어 문구", config:"설정 내보내기/가져오기" };
 function go(pane){
+  CURRENT_PANE=pane;
   document.querySelectorAll(".nav button").forEach(b=>b.classList.toggle("active",b.dataset.pane===pane));
   document.querySelectorAll(".pane").forEach(p=>p.classList.remove("active"));
   $("pane-"+pane).classList.add("active");
@@ -393,7 +381,7 @@ RENDER.revenue=()=>{
   const months=[...new Set(dates.map(d=>d.slice(0,7)))].sort();
   const quick=months.map(m=>`<button class="btn sm" data-rv="quick" data-m="${m}">${m}</button>`).join("")+`<button class="btn sm" data-rv="all">전체</button>`;
   $("pane-revenue").innerHTML=`
-    <h2>매출</h2><p class="desc">달력에서 기간을 골라 매출을 확인하고 엑셀로 내보냅니다. (샘플 데이터 — 실서비스에서는 완료된 예약/결제로 자동 집계)</p>
+    <h2>매출</h2><p class="desc">소비자앱에서 예약이 완료되면 매출이 자동으로 쌓입니다. 달력에서 기간을 골라 월별/일별로 확인하고 엑셀로 내보내세요.</p>
     <div class="card"><h3><span class="k"></span>기간 선택</h3>
       <div class="grid c4" style="align-items:end">
         <div><label class="lbl">시작일</label><input type="date" id="rvFrom" value="${esc(from)}"></div>
@@ -718,8 +706,15 @@ $("importFile").addEventListener("change",e=>{
 /* ---- 브랜딩 색상 실시간 반영 (관리자 화면 자체) ---- */
 function applyBranding(){ const r=document.documentElement.style; r.setProperty("--lime",AdminState.branding.pointColor); r.setProperty("--emerald",AdminState.branding.accent); }
 
+/* 소비자앱에서 예약 완료로 매출이 추가되면(다른 탭 storage 변경) 자동 반영 */
+window.addEventListener("storage",e=>{
+  if(e.key!==ConfigStore.KEY) return;
+  const s=ConfigStore.load();
+  if(s&&Array.isArray(s.sales)){ AdminState.sales=s.sales; if(CURRENT_PANE==="revenue") RENDER.revenue(); if(CURRENT_PANE==="dashboard") RENDER.dashboard(); }
+});
+
 /* ---- 시작 ---- */
-const _saved=ConfigStore.load(); if(_saved){ Object.assign(AdminState,_saved); }  // 이전에 저장한 설정 복원
+const _saved=ConfigStore.load(); if(_saved){ Object.assign(AdminState,_saved); }  // 이전에 저장한 설정/매출 복원
 applyBranding();
 RENDER.dashboard();
 </script>

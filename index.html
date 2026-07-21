@@ -871,6 +871,7 @@ const App = {
       payload.status="ASSIGNED";
       payload.dispatch={ assignedDriverId:driver.id, driverName:driver.nameKo, vehicle:driver.car, plate:driver.plate, rating:driver.rating, vehicleType:this.selectedVehicle.type, seats:this.selectedVehicle.seats, etaMin:6 };
       const ack=await BookingService.submit(payload);
+      recordSale(payload);                 // 매출 원장에 기록 → 관리자 매출 메뉴 반영
       this.logPayload(payload,ack); this.toast(I18nService.t("toast_booked"));
     }catch(err){ this.logError(err); }
     finally{ this.els.bookBtn.disabled=false; }
@@ -891,8 +892,28 @@ const App = {
  * ========================================================================== */
 const ConfigStore = {
   KEY:"taxiK_config_v1",
-  load(){ try{ const s=localStorage.getItem(this.KEY); return s?JSON.parse(s):null; }catch(e){ return null; } }
+  load(){ try{ const s=localStorage.getItem(this.KEY); return s?JSON.parse(s):null; }catch(e){ return null; } },
+  save(cfg){ try{ localStorage.setItem(this.KEY, JSON.stringify(cfg)); return true; }catch(e){ return false; } }
 };
+/* 예약 완료 시 매출 원장에 기록 → 관리자 "매출" 메뉴에 반영 (공유 설정)
+   TODO(handoff): 실서비스는 서버 결제완료 이벤트에서 매출을 적재. */
+function recordSale(payload){
+  try{
+    const cfg=ConfigStore.load()||{};
+    cfg.sales=Array.isArray(cfg.sales)?cfg.sales:[];
+    const d=new Date();
+    const date=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+    const prov=PaymentService._providers.get(payload.payment.method);
+    cfg.sales.push({
+      date,
+      bookingId:payload.bookingId,
+      vehicle:(payload.trip.vehicle&&payload.trip.vehicle.name)||"",
+      pay:(prov&&prov._label)||payload.payment.method,
+      amount:payload.fare.amountVnd
+    });
+    ConfigStore.save(cfg);
+  }catch(e){ /* 저장 실패 시 무시(데모 지속) */ }
+}
 /* 관리자 설정(cfg) → 소비자앱 내부 구조에 반영 */
 function applyConfig(cfg){
   try{
